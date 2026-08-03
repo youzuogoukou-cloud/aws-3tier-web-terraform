@@ -17,8 +17,3 @@ variable "subnet_id" {
   description = "aws subnet id"
   type        = string
 }
-
-variable "public_key" {
-  description = "public key"
-  type        = string
-}

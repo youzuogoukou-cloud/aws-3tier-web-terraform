@@ -5,6 +5,13 @@ terraform {
       version = "~> 5.0"
     }
   }
+  backend "s3" {
+    bucket = "tf-portfolio-state-533266981533-ap-northeast-1-an"
+    key    = "terraform.tfstate"
+    region = "ap-northeast-1"
+    use_lockfile = true
+    encrypt      = true
+}
 }
 
 provider "aws" {
@@ -42,12 +49,7 @@ moved {
 
 moved {
   from = aws_security_group.ssh_sg
-  to   = module.compute.aws_security_group.ssh_sg
-}
-
-moved {
-  from = aws_key_pair.key
-  to   = module.compute.aws_key_pair.key
+  to   = module.compute.aws_security_group.ssm_sg
 }
 
 moved {
@@ -86,6 +88,5 @@ module "compute" {
   project_name   = var.project_name
   vpc_id         = module.network.vpc_id
   subnet_id      = module.network.subnet_ids["a"]
-  public_key     = file("terraform-key.pub")
 }
 

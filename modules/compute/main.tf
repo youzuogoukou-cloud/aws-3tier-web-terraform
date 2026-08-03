@@ -1,6 +1,6 @@
-resource "aws_security_group" "ssh_sg" {
-  name        = "${var.project_name}_ssh_sg"
-  description = "Allow SSH from my IP"
+resource "aws_security_group" "ssm_sg" {
+  name        = "${var.project_name}_ssm_sg"
+  description = "Allow SSM from my IP"
   vpc_id      = var.vpc_id
 
   ingress = []
@@ -13,12 +13,6 @@ resource "aws_security_group" "ssh_sg" {
   }
 
   tags = { Name = "${var.project_name}_sg" }
-}
-
-resource "aws_key_pair" "key" {
-  key_name   = "${var.project_name}-key"
-  public_key = var.public_key
-  tags       = { Name = "${var.project_name}_key_pair" }
 }
 
 data "aws_ami" "amazon_linux" {
@@ -35,8 +29,7 @@ resource "aws_instance" "ec2" {
   ami                    = data.aws_ami.amazon_linux.id
   instance_type          = var.instance_type
   subnet_id              = var.subnet_id
-  vpc_security_group_ids = [aws_security_group.ssh_sg.id]
-  key_name               = aws_key_pair.key.key_name
+  vpc_security_group_ids = [aws_security_group.ssm_sg.id]
 
   iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
 
