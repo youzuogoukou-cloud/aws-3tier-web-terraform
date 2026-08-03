@@ -6,12 +6,12 @@ terraform {
     }
   }
   backend "s3" {
-    bucket = "tf-portfolio-state-533266981533-ap-northeast-1-an"
-    key    = "terraform.tfstate"
-    region = "ap-northeast-1"
+    bucket       = "tf-portfolio-state-533266981533-ap-northeast-1-an"
+    key          = "terraform.tfstate"
+    region       = "ap-northeast-1"
     use_lockfile = true
     encrypt      = true
-}
+  }
 }
 
 provider "aws" {
@@ -84,9 +84,9 @@ module "network" {
 module "compute" {
   source = "./modules/compute/"
 
-  instance_type  = var.instance_type
-  project_name   = var.project_name
-  vpc_id         = module.network.vpc_id
-  subnet_id      = module.network.subnet_ids["a"]
+  instance_type = var.instance_type
+  project_name  = var.project_name
+  vpc_id        = module.network.vpc_id
+  subnet_id     = module.network.subnet_ids["a"]
 }
 
