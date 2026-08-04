@@ -259,6 +259,49 @@ Interface vs Gateway（ENIの有無で全部決まる）/ PrivateLink=サービ�
 
 ---
 
+## 🔟 第8回で増えたネタ ─ PrivateLink・ルーティング・型システム
+
+このセッションの概念深掘りから。💬は本人が実際に詰まって聞いた質問（第8回）。
+
+### PrivateLink / エンドポイント
+- [ ] **PrivateLinkは「サービスへの道」─ EC2への道ではない** ｜芯：SSM/S3等のサービス窓口をVPC内にENIで生やす仕組み。EC2実体へはIP(内側から)かSSM(instance-id)で、EC2にPrivateLinkは張れない。
+  💬「private linkでSSH接続するとprivate ipで接続するからpublic ipはいらない？」「privatelinkは直でEC2につなげるサービス？」「EC2とS3はどちらもAWSサービスでは？」
+- [ ] **Interface vs Gateway ─ 全部「ENIの有無」で決まる** ｜芯：Interface=ENIあり(SG/subnet要・有料)、Gateway=ルート1行(ENI無・無料・S3/DynamoDBのみ)。型はサービスが決める。
+  💬「Interfaceか Gatewayかは接続先で変わるだけ？」「なんでEC2からはGatewayを選べないの？」
+- [ ] **`private_dns_enabled` の正体 ─ DNSの"解決先"を変える** ｜芯：標準DNS名をVPC内でエンドポイントのprivate IPに解決させる。エージェント設定を変えず透過的にprivate化。
+  💬「private_dns_enabledがtrueなのは常にprivate ipで通信するから？」
+- [ ] **エンドポイントはサービス単位・VPC共有** ｜芯：1サービス=1エンドポイント。全EC2で共有(instance毎でない)。多サービス=課金増→NATとのトレードオフ。
+  💬「サービスごとにエンドポイントを作らないといけないの？」
+
+### ネットワーク / ルーティング
+- [ ] **SGはステートフル ─ なぜSSMは inbound 0 で動くのか** ｜芯：自分が始めた通信の"返り"は自動許可。ユーザー指示もエージェントのoutbound接続の返り。データ受信≠inbound接続。
+  💬「ユーザーが指示したらEC2は受け取りますよね、結局アウトバウンドにならない？」「DNSリゾルバにインバウンドSGはいらない？」
+- [ ] **localルートがエンドポイントへの道 ─ 働く行が変わる** ｜芯：エンドポイントはVPC内のENI(private IP)。EC2→エンドポイントはlocalルートが運ぶ。昔はIGWルート、今はlocalルート。
+  💬「現状SSMにつなぐ際にルートテーブルは役に立っている？」
+- [ ] **localルートはVPC全体 ─ 別サブネットは追記不要、別VPCは別途** ｜芯：localはVPC CIDR全体=全AZ・全サブネット。別サブネットは不要、別VPCはピアリング/TGW。境界はVPC(AZではない)。
+  💬「異なるVPCやサブネットだと別途書く必要がある？」「AZを変えても同じVPCならlocal？」
+- [ ] **`0.0.0.0/0` の正体は「全宛先」─ 特定CIDRでegress制限** ｜芯：0.0.0.0/0=すべての宛先。IGWに向けて既定のネット行き。特定公開CIDRだけ書けば他は遮断。IPv6は`::/0`。
+  💬「インターネット接続で0.0.0.0/0以外はある？」「他の公開IPを制限したいから特定CIDRを書く？」
+- [ ] **名前解決は"接続の前" ─ DNSの順番** ｜芯：IPが分からないと接続できない→まず名前解決(名前→IP)、それから接続。解決はEC2↔VPCリゾルバ間(SSM本体は関与しない)。
+  💬「エンドポイントのprivate IPでインバウンドできた後、名前解決して通信させる？」
+- [ ] **Route 53は書いてないのに使える ─ 自動の部品 vs 宣言する部品** ｜芯：VPCのDNSリゾルバは自動で存在(localルートと同じ)。private_dnsもAWS管理。独自名が欲しい時だけ`aws_route53_zone`を書く。
+  💬「Route 53のリソース書いてないですよ？」
+- [ ] **閉じた環境でもRoute 53は使える** ｜芯：`.2`リゾルバは内部インフラ(ネット不要)。プライベートホストゾーンが閉域DNSの本領。公開ゾーンは解決先に繋げず無意味。
+  💬「このような閉じた環境でもRoute 53は使える？」
+
+### 型システム（Terraform）
+- [ ] **型の調べ方3種** ｜芯：`terraform providers schema -json`(正確)、`terraform console`の`type()`(自分の値)、わざと違う型を渡してエラー(期待型が出る)。
+  💬「何の型を受け取っているかを判断するには？」
+- [ ] **マップを渡すとsetに変わる ─ 暗黙の型変換とキー破棄** ｜芯：受け取り側がset型なら、マップは値だけ取り出しキー破棄でsetに自動変換。動くが読み手に不明瞭。
+  💬「今のsubnet_idsをmapで渡すとどうなる？」「{}で渡しているのに[]になるの？」
+- [ ] **set は `[0]` できない ─ list と set の決定的な違い** ｜芯：setは順序なし・重複不可でindexアクセス不可(Terraformがエラー)。tolist()で列に変換すれば可(順序はソート順)。
+  💬「listだと`subnet[0]`で順序で行けますよね、setにはない？」
+- [ ] **count は数値・for_each は set/map** ｜芯：countの入力は数値(結果はindex)、for_eachの入力はset/map(結果はキー)。listはtoset必須。
+  💬「countはlist、for_eachはset/mapで、それ以外は受け付けない？」
+- [ ] **`{ Name = "x" }` はマップ ─ HCLのキーは`=`、キーは裸/値の文字列は`""`** ｜芯：HCLはキー・値を`=`で区切る(他言語の`:`)。キーの裸単語=文字列、値の裸単語=参照。Nameは任意のタグキー。
+  💬「このNameはなに？"Name"でなくていい？」「なぜ文字列に""がつかないの？」
+- [ ] **validateが通っても型は間違える** ｜芯：`vpc_id = var.vpc_cidr_block`は文字列同士でvalidate通過、apply時にAWSが弾く(cidr≠id)。引数名が期待する値を教える。
+
 ## 全体を通じて言語化できるようになったこと
 - 「値の決定権を誰が持つか」で variable / data / locals / resource を説明できる
 - `count`（インデックス）と `for_each`（キー）の設計上の違い
