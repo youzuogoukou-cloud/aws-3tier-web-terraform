@@ -12,7 +12,7 @@ resource "aws_security_group" "ssm_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "${var.project_name}_sg" }
+  tags = { Name = "${var.project_name}_ssm_sg" }
 }
 
 data "aws_ami" "amazon_linux" {

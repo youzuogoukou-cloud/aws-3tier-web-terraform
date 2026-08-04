@@ -5,5 +5,5 @@ output "vpc_id" {
 
 output "subnet_ids" {
   description = "subnet ids"
-  value       = { for k, v in var.subnets : k => aws_subnet.public_subnet[k].id }
+  value       = { for k, v in var.subnets : k => aws_subnet.private_subnet[k].id }
 }

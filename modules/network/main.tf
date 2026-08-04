@@ -27,3 +27,36 @@ resource "aws_route_table_association" "association" {
   route_table_id = aws_route_table.private_table.id
 }
 
+resource "aws_security_group" "endpoint_sg" {
+  name        = "${var.project_name}_endpoint_sg"
+  description = "Allow  inbound 443 from VPC"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr_block]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${var.project_name}_endpoint_sg" }
+}
+
+resource "aws_vpc_endpoint" "vpc_endpoint"{
+  vpc_id  = aws_vpc.main.id
+
+  for_each = toset(["ssm","ec2messages","ssmmessages"])
+  service_name  = "com.amazonaws.${var.region}.${each.key}"
+  vpc_endpoint_type  = "Interface"
+  subnet_ids  = [ for k, v in var.subnets : aws_subnet.private_subnet[k].id ]
+  security_group_ids  = [aws_security_group.endpoint_sg.id]
+  private_dns_enabled  = true
+}
+

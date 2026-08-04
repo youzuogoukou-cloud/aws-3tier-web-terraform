@@ -149,11 +149,23 @@ IAMポリシー＝「**誰が**何をできるか」、バケットポリシー�
 
 ---
 
-## 第8回：プライベートサブネット＋VPCエンドポイント化（予定）
-📅 実装しながら追記
+## 第8回：プライベートサブネット＋VPCエンドポイント化 〜インターネット無しでSSM〜
+📅 2026-08-04
 
-**この回のねらい**
-EC2から Public IP も IGW も無くし、**インターネット非接続のまま**SSMでシェルに入れることを実証。SSMに必要なインターフェイスエンドポイント3つ（`ssm` / `ec2messages` / `ssmmessages`）を作る。無料のIGWを捨て、時間課金のエンドポイントを買う**トレードオフ**も体験。
+**この回のテーマ**
+EC2から Public IP も IGW も無くし、**インターネット非接続のまま**SSMでシェルに入れることを実証。SSMに必要なインターフェイスエンドポイント3つ（`ssm` / `ssmmessages` / `ec2messages`）を作る。
+
+**つまずき**
+「PrivateLink＝EC2への接続手段」と誤解し、SSHやVPNと混同して長く迷った。他にも `protocol` と `port` の混同（443はポート、tcpがプロトコル）、マップ→set の自動変換、`subnet_ids` の取り違え、`vpc_id = var.vpc_cidr_block`（validateは通るがapplyで失敗する型の取り違え）。
+
+**腑に落ちた瞬間**
+**PrivateLinkは「サービスへの道」であって「EC2への道」ではない**（EC2へはIP or SSM）。**SGとサブネットが要るのはENIがあるから**——Interface型はENI有り（SG/subnet要）、Gateway型はENI無し（不要・無料）。`private_dns_enabled=true` は「標準のDNS名の"解決先"をエンドポイントのprivate IPに変える」設定。EC2→エンドポイントは**localルート**が運ぶ（エンドポイントもVPC内のリソースだから）。
+
+**面接で使える一言**
+「Public IPもIGWも持たない（インターネット到達不能な）EC2に、VPCインターフェイスエンドポイント経由でSSMエージェントを登録させ、instance-id指定でシェルを確立。SSMがアウトバウンド通信であることを閉域ネットワークで実証した。」
+
+**🔑 深掘り用キーワード**
+Interface vs Gateway（ENIの有無で全部決まる）/ PrivateLink=サービス窓口・EC2へはSSM / private_dns=DNS解決先の変更 / localルートがエンドポイントへの道 / SSMは3エンドポイント / エンドポイントはサービス単位・VPC共有 / SGはステートフル（受信=送信の返り）/ NATとのコストトレードオフ / 実証：Public IP=null・PingStatus=Online
 
 ---
 
