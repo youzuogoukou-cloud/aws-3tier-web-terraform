@@ -16,8 +16,17 @@ variable "vpc_cidr_block" {
   default     = "10.0.0.0/16"
 }
 
-variable "subnets" {
+variable "public_subnets" {
   description = "aws public subnet cidr block"
+  type        = map(string)
+  default = {
+    a = "10.0.101.0/24"
+    c = "10.0.102.0/24"
+  }
+}
+
+variable "private_subnets" {
+  description = "aws private subnet cidr block"
   type        = map(string)
   default = {
     a = "10.0.1.0/24"

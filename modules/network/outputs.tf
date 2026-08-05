@@ -3,7 +3,12 @@ output "vpc_id" {
   value       = aws_vpc.main.id
 }
 
-output "subnet_ids" {
+output "public_subnet_ids" {
   description = "subnet ids"
-  value       = { for k, v in var.subnets : k => aws_subnet.private_subnet[k].id }
+  value       = { for k, v in var.public_subnets : k => aws_subnet.public_subnet[k].id }
+}
+
+output "private_subnet_ids" {
+  description = "subnet ids"
+  value       = { for k, v in var.private_subnets : k => aws_subnet.private_subnet[k].id }
 }

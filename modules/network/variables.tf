@@ -8,7 +8,12 @@ variable "vpc_cidr_block" {
   type        = string
 }
 
-variable "subnets" {
+variable "public_subnets" {
+  description = "aws public subnet cidr block"
+  type        = map(string)
+}
+
+variable "private_subnets" {
   description = "aws private subnet cidr block"
   type        = map(string)
 }

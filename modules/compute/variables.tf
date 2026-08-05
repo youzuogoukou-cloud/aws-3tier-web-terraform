@@ -13,7 +13,12 @@ variable "vpc_id" {
   type        = string
 }
 
-variable "subnet_id" {
+variable "public_subnet_ids" {
+  description = "aws subnet id"
+  type        = list(string)
+}
+
+variable "private_subnet_id" {
   description = "aws subnet id"
   type        = string
 }

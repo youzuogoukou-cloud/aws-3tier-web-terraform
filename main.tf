@@ -25,18 +25,20 @@ provider "aws" {
 module "network" {
   source = "./modules/network/"
 
-  region         = var.region
-  subnets        = var.subnets
-  vpc_cidr_block = var.vpc_cidr_block
-  project_name   = var.project_name
+  region          = var.region
+  public_subnets  = var.public_subnets
+  private_subnets = var.private_subnets
+  vpc_cidr_block  = var.vpc_cidr_block
+  project_name    = var.project_name
 }
 
 module "compute" {
   source = "./modules/compute/"
 
-  instance_type = var.instance_type
-  project_name  = var.project_name
-  vpc_id        = module.network.vpc_id
-  subnet_id     = module.network.subnet_ids["a"]
+  instance_type     = var.instance_type
+  project_name      = var.project_name
+  vpc_id            = module.network.vpc_id
+  public_subnet_ids = values(module.network.public_subnet_ids)
+  private_subnet_id = module.network.private_subnet_ids["a"]
 }
 

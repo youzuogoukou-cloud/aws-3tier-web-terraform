@@ -1,9 +1,14 @@
-resource "aws_security_group" "ssm_sg" {
-  name        = "${var.project_name}_ssm_sg"
-  description = "Allow SSM from my IP"
+resource "aws_security_group" "ec2_sg" {
+  name        = "${var.project_name}_ec2_sg"
+  description = "Security group for EC2: allow HTTP from ALB"
   vpc_id      = var.vpc_id
 
-  ingress = []
+  ingress {
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb_sg.id]
+  }
 
   egress {
     from_port   = 0
@@ -12,8 +17,62 @@ resource "aws_security_group" "ssm_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "${var.project_name}_ssm_sg" }
+  tags = { Name = "${var.project_name}_ec2_sg" }
 }
+
+resource "aws_security_group" "alb_sg" {
+  name        = "${var.project_name}_alb_sg"
+  description = "Security group for ALB: allow HTTP from internet"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${var.project_name}_alb_sg" }
+}
+
+resource "aws_lb" "alb" {
+  name               = "${var.project_name}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  subnets            = var.public_subnet_ids
+  security_groups    = [aws_security_group.alb_sg.id]
+
+  enable_deletion_protection = false
+
+  tags = { Name = "${var.project_name}_alb" }
+}
+
+resource "aws_lb_target_group" "alb_tg" {
+  name        = "${var.project_name}-alb-tg"
+  port        = 80
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "instance"
+}
+
+resource "aws_lb_listener" "alb_listener" {
+  load_balancer_arn = aws_lb.alb.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.alb_tg.arn
+  }
+}
+
 
 data "aws_ami" "amazon_linux" {
   most_recent = true
@@ -28,10 +87,17 @@ data "aws_ami" "amazon_linux" {
 resource "aws_instance" "ec2" {
   ami                    = data.aws_ami.amazon_linux.id
   instance_type          = var.instance_type
-  subnet_id              = var.subnet_id
-  vpc_security_group_ids = [aws_security_group.ssm_sg.id]
+  subnet_id              = var.private_subnet_id
+  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
 
   iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
+
+  user_data = <<-EOF
+       #!/bin/bash
+       dnf install -y httpd
+       systemctl enable --now httpd
+       echo "<h1>Hello from $(hostname)</h1>" > /var/www/html/index.html
+  EOF
 
   tags = { Name = "${var.project_name}_ec2" }
 }
@@ -51,6 +117,12 @@ resource "aws_iam_role" "ssm_role" {
       }
     ]
   })
+}
+
+resource "aws_lb_target_group_attachment" "alb_tg_attachment" {
+  target_group_arn = aws_lb_target_group.alb_tg.arn
+  target_id        = aws_instance.ec2.id
+  port             = 80
 }
 
 resource "aws_iam_role_policy_attachment" "ssm" {
