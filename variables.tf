@@ -37,6 +37,6 @@ variable "private_subnets" {
 variable "project_name" {
   description = "project name"
   type        = string
-  default     = "test"
+  default     = "portfolio-web"
 }
 

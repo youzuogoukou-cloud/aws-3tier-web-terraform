@@ -1,3 +1,5 @@
 terraform-key
 terraform.tfstate*
 .terraform/
+*.tfvars
+crash.log

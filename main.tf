@@ -35,10 +35,10 @@ module "network" {
 module "compute" {
   source = "./modules/compute/"
 
-  instance_type     = var.instance_type
-  project_name      = var.project_name
-  vpc_id            = module.network.vpc_id
-  public_subnet_ids = values(module.network.public_subnet_ids)
+  instance_type      = var.instance_type
+  project_name       = var.project_name
+  vpc_id             = module.network.vpc_id
+  public_subnet_ids  = values(module.network.public_subnet_ids)
   private_subnet_ids = values(module.network.private_subnet_ids)
 
 }

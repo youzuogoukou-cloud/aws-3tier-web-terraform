@@ -4,11 +4,11 @@ output "vpc_id" {
 }
 
 output "public_subnet_ids" {
-  description = "subnet ids"
+  description = "Public subnet ids keyed by AZ suffix"
   value       = { for k, v in var.public_subnets : k => aws_subnet.public_subnet[k].id }
 }
 
 output "private_subnet_ids" {
-  description = "subnet ids"
+  description = "Private subnet ids keyed by AZ suffix"
   value       = { for k, v in var.private_subnets : k => aws_subnet.private_subnet[k].id }
 }

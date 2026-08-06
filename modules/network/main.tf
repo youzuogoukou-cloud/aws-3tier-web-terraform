@@ -12,7 +12,7 @@ resource "aws_subnet" "public_subnet" {
   cidr_block              = each.value
   availability_zone       = "${var.region}${each.key}"
   map_public_ip_on_launch = true
-  tags                    = { Name = "${var.project_name}_subnet_${each.key}" }
+  tags                    = { Name = "${var.project_name}_public_subnet_${each.key}" }
 }
 
 resource "aws_subnet" "private_subnet" {
@@ -22,7 +22,7 @@ resource "aws_subnet" "private_subnet" {
   cidr_block              = each.value
   availability_zone       = "${var.region}${each.key}"
   map_public_ip_on_launch = false
-  tags                    = { Name = "${var.project_name}_subnet_${each.key}" }
+  tags                    = { Name = "${var.project_name}_private_subnet_${each.key}" }
 }
 
 resource "aws_route_table" "public_table" {
@@ -63,7 +63,7 @@ resource "aws_internet_gateway" "gw" {
 
 resource "aws_security_group" "endpoint_sg" {
   name        = "${var.project_name}_endpoint_sg"
-  description = "Allow  inbound 443 from VPC"
+  description = "Security group for VPC interface endpoints: allow HTTPS from within the VPC"
   vpc_id      = aws_vpc.main.id
 
   ingress {

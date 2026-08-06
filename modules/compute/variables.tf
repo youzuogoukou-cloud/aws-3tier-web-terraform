@@ -14,11 +14,11 @@ variable "vpc_id" {
 }
 
 variable "public_subnet_ids" {
-  description = "aws subnet id"
+  description = "Public subnet ids to place the ALB in (requires two or more AZs)"
   type        = list(string)
 }
 
 variable "private_subnet_ids" {
-  description = "aws subnet id"
+  description = "Private subnet ids the ASG launches EC2 instances into"
   type        = list(string)
 }
