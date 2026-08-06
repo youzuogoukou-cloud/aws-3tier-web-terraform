@@ -39,6 +39,7 @@ module "compute" {
   project_name      = var.project_name
   vpc_id            = module.network.vpc_id
   public_subnet_ids = values(module.network.public_subnet_ids)
-  private_subnet_id = module.network.private_subnet_ids["a"]
+  private_subnet_ids = values(module.network.private_subnet_ids)
+
 }
 

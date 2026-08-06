@@ -189,6 +189,26 @@ ALB3点セット（本体/TG/リスナー）/ ALB(L7)vs NLB(L4) / SGソース=ci
 
 ---
 
+## 第10回：Auto Scaling 導入 〜自己修復するインフラと「家畜」の思想〜
+📅 2026-08-06
+
+**この回のテーマ**
+固定1台の `aws_instance` を捨て、`aws_launch_template` ＋ `aws_autoscaling_group` に置き換える。ASGがAZ-a / AZ-c に1台ずつEC2を起動し、ALBのターゲットグループへ自動登録。`health_check_type = "ELB"` を設定し、**httpdを手で殺してASGが自動でEC2を作り直すところまで実機で観察**した。
+
+**つまずき**
+前セッションで書いたASGコードが**Ctrl+S忘れで消失**（第4回の再演）。会話ログのjsonlから復元して再開した。`plan` のリソース数予測で「ASGが起動するEC2 2台」を数えて28と答えてしまった（正解は27）。「調査したい1台を生かす仕組み」を `health_check_type` と誤答（正解はスタンバイ）。壊した1台が `shutting-down` に入るまで**ずっと `running` に見える**ことに混乱した。
+
+**腑に落ちた瞬間**
+Terraformが作るのは「**ASGという箱**」までで、EC2はASGが作るので **stateにもplanにも出ない**。ASGの行動ログにその瞬間が残っていた ─ `06:06:46 a user request created an AutoScalingGroup`（Terraformの仕事はここで終わり）→ `06:06:48 an instance was started in response to a difference between desired and actual capacity`（ここからはAWSの仕事）。だから `output "instance_id"` は書けなくなり、個体はNameタグで探すものになる＝**Cattle, not Pets**。そして自己修復の決定的証拠が `an instance was taken out of service in response to an **ELB system health check failure**`。既定の `"EC2"` のままなら、OSは生きているのでこの行は永久に出ない。
+
+**面接で使える一言**
+「固定EC2をASG化し、ELBヘルスチェック連動で自己修復する構成にした。ASG配下のEC2はTerraformが作らないためstateに載らず、インスタンスIDをoutputできない。これは個体を手当てせず入れ替える運用（Cattle, not Pets）への転換そのもの。実機でhttpdを停止させ、ALBが約60秒で切り離し、その後ASGが該当インスタンスを終了して別IPの代替を起動するまでをスケーリングアクティビティのログで確認した。可用性とは障害をゼロにすることではなく、検知と復旧に要する時間を短くすることだと説明できる。」
+
+**🔑 深掘り用キーワード**
+launch_template ＝ EC2の設計図 / ASGは箱・EC2はAWSが作る（planに出ない）/ 結合点は `target_group_arns` の1行（ALBはASGを知らない）/ `health_check_type = "ELB"` が自己修復の前提 / desired=エンジン・min=床・max=天井 / 検知は瞬時でない（interval 30秒 × unhealthy 2回 = 最大60秒）/ 速い検知 vs 誤検知のトレードオフ / ALBは切り離すだけ・殺すのはASG / Cattle, not Pets / スタンバイはコードでなくCLI（Terraformは名詞・CLIは動詞）/ `describe-scaling-activities` の Cause が一次ソース
+
+---
+
 # 📝 記事ネタ帳（概念解説 ＋ リアル質問 統合版）
 
 各項目 = note記事1本の候補。**芯**＝答えの要点（そのまま書き出せる）、**💬**＝実際に詰まって聞いた質問（記事のフック／`（第N回）`は出典）。
@@ -398,6 +418,55 @@ ALB3点セット（本体/TG/リスナー）/ ALB(L7)vs NLB(L4) / SGソース=ci
 - [ ] **ELB名にアンダースコアが使えない理由 ─ DNSホスト名になるから** ｜芯：ELB名はLBのDNS名の一部になる。DNSホスト名は英数字とハイフンのみ(LDH)でアンダースコア不可。S3バケットも同理由で厳しい。IAM/SGはDNSに乗らないので緩い。
   💬（planでエラー実演）「name = ..._ec2-ssm-role これは？」（IAMはアンダースコアOK）
 
+## ⑫ 第10回で増えたネタ ─ ASG・可用性・運用の境界
+
+### Auto Scaling の構造
+- [ ] **ASGが起動したEC2はTerraformの管理外** ｜芯：Terraformが作るのは「ASGという箱」まで。EC2はASGが実行時に起動するのでstateに載らずplanにも出ない。第9回27リソース→第10回も27（`aws_instance`と`target_group_attachment`が消え、`launch_template`と`asg`が増えた＝数は同じで中身が入れ替わった）。`describe-scaling-activities` の Cause に「Terraformの仕事の終わり」と「AWSの仕事の始まり」が2秒差で記録されている。
+  💬「planの数は27＋ASGとテンプレート、EC2がAZまたぎで2台だから28？」
+- [ ] **instance_id を output できなくなる ─ Cattle, not Pets** ｜芯：`aws_autoscaling_group` はインスタンスIDを属性に持たない（`terraform providers schema -json` で確認可）。台数が動的に変わるものをapply時点の静的な値に固定できないため。個体はNameタグで検索する。ASG構成では復旧手段は「入れ替え」であり、シェルアクセスは原因調査に限られる。実際にIPが `10.0.1.101 → 10.0.1.43` と変わり「直したのではなく捨てて建てた」ことが見えた。
+  💬「outputのinstance idはどうやって抜き出すの？SSM接続がある以上いりますよね？」「異常時の対応ができない」
+- [ ] **ALBとASGの結合点は `target_group_arns` の1行だけ** ｜芯：ALBはASGの存在を知らない。ASGが一方的にターゲットグループへ登録/解除する。だから台数が2→3→1と変わってもALB側のコードは不変＝疎結合。第9回は `aws_lb_target_group_attachment` で**人間が静的に**登録していた。
+  💬「ASGとALBの関係性、通信の流れを教えて」
+- [ ] **desired / min / max の役割分担** ｜芯：`desired_capacity`＝常に維持しようとする台数（**自己修復のエンジンはこれ**）、`min_size`＝床（スケーリングポリシーや手動操作でも下回れない保険）、`max_size`＝天井。min=desired=max=2 は「増減しない固定2台ASG」で、スケーリングポリシーを入れるなら max に余裕が要る。
+  💬「minは今日でも意味がある、とは？スケーリングポリシーがないと意味ないのでは？」
+- [ ] **SGはASGでなくlaunch_templateに付く** ｜芯：SGはENIに付く属性なので「EC2の設計図」側に書く。ASGは台数と配置を決める箱であってEC2の中身を決めない。`vpc_security_group_ids` / `image_id` / `instance_type` / `user_data` / `iam_instance_profile` は全部テンプレート側。
+  💬「なぜSGはASGにつかないの？」「instance_typeは同じ引数でいける、amiでもいける？」
+
+### 可用性とヘルスチェック
+- [ ] **`health_check_type` は「壊れた」の定義を決める** ｜芯：既定 `"EC2"` はインスタンスのステータスチェック（OSの死活）のみ。httpdだけ死んだEC2は**健全と判定される**。`"ELB"` にするとターゲットグループのHTTPヘルスチェック結果も見るので、アプリ層の障害で入れ替わる。ALBを前段に置くなら実質必須。証拠は Cause の `ELB system health check failure`。
+- [ ] **検知は瞬時ではない ─ 可用性は「影響時間の最小化」** ｜芯：ALBのヘルスチェック既定は interval 30秒 × unhealthy threshold 2回＝**最大60秒**は死んだEC2に振り分け続ける。この間は502が返る（503は健全ターゲット0のとき）。縮めるとアプリ負荷増＋誤検知のトレードオフ。障害ゼロは作れない。
+  💬「httpd停止直後は正常に見えると思ったが、半分エラーになった」
+- [ ] **ALBは切り離すだけ、殺すのはASG ─ 2段階ある** ｜芯：ALBが unhealthy にしても、そのEC2は普通に `running` のまま生き続ける（客を通さないだけ）。終了させるのはASGの仕事で別タイミング。さらに `running → shutting-down → terminated` は数分かかる。`--filters "Name=instance-state-name,Values=running"` で絞っていると「消えた」ように見えるが実際は状態が変わっただけ。
+  💬「動かなくなったEC2は終了させるのでは？ずっとrunningで出ます」「SSMが繋いだままだとセッションは切れないの？」
+- [ ] **ASG配下でプライベートサブネットを使う理由** ｜芯：ALB→EC2は同一VPCなので**localルート**で成立し、public/privateは無関係＝publicでも「動く」。privateにするのは経路そのものを断つため。publicに置くとパブリックIPが付き、IGWへの経路を持ち、**第8回で作ったVPCエンドポイントの存在意義が消え**、守りがSG1枚に減る（多層防御の喪失）。
+- [ ] **AZ分散はASGが自動で均す（AZRebalance）** ｜芯：`vpc_zone_identifier` に複数サブネットを渡すとASGがAZ間で台数を均等配分。2台なら1a/1cに1台ずつ。壊した1台の代替も同じAZに立った。
+
+### 運用とTerraformの境界
+- [ ] **Terraformは名詞、CLIは動詞** ｜芯：恒常的な「あるべき構成」はコード、その場限りの操作はCLI/コンソール。スタンバイ・再起動・起動停止はコードに書かない（書くと「常にその状態であるべき」の宣言になりdriftの原因）。
+  💬「スタンバイはどこになんの引数でつけるの？」
+- [ ] **スタンバイ ─ 調査したい1台を生かしたまま外す** ｜芯：ASGのカウントから一時的に外す運用操作。ALBのターゲットからも外れ、終了もされない。`--no-should-decrement-desired-capacity` なら代替が起動しサービスは2台継続、`--should-decrement-...` なら台数を減らす。ただしスタンバイ中も上限にカウントされるため `max_size` に余裕が無いと代替を launch できない。
+- [ ] **suspended_processes と protect_from_scale_in の違い** ｜芯：前者は**ASGの機能そのもの**を止める（Launch/Terminate/HealthCheck/ReplaceUnhealthy/AZRebalance…）＝ASG全体に効くブレーカー。後者は**インスタンス単位**の札で「スケールインの終了対象に選ばないで」だけ＝ヘルスチェック置換や手動terminateは防げない。調査用途にはどちらも過不足があり、スタンバイが第一選択。
+  💬「suspended_processesとprotect_from_scale_inの違いは？」
+- [ ] **CloudWatchで足りる範囲・足りない範囲** ｜芯：ログを個体の外に出しておけば個体が消えても残る＝第一手。限界は「**事前に出すと決めていないものは後から取りに行けない**」（メモリ、プロセス一覧、ディスクの中身、tcpdump）。だから現物確保（スタンバイ）の手段も要る。
+  💬「CloudWatchで異常終了のログを出せば、インスタンスを残さなくてよいのでは？」
+
+### DNS ─ 権威とリゾルバ
+- [ ] **名前解決するのは「通信を始めたい側」** ｜芯：軸はインバウンド/アウトバウンドではなく**問い合わせる人がどこにいるか**。VPC内のEC2が引くならVPCリゾルバ（`.2`アドレス）、自宅PCがALBのDNS名を引くならISPのリゾルバ。**インバウンドのときVPCリゾルバは一切登場しない**。
+  💬「アウトバウンドはVPCリゾルバが名前解決していた。ではインバウンドのパブリックIPは誰が名前解決しているの？」
+- [ ] **権威サーバとフルサービスリゾルバ** ｜芯：権威＝答えを持っている人（`*.elb.amazonaws.com` はAWS/Route 53が権威）、フルサービスリゾルバ＝答えを探しに行く代理人（ISPのDNS、8.8.8.8、**VPCリゾルバもこちら**）。ルート→.com→amazonaws.com と辿る。
+- [ ] **split-horizon DNS ＝ private_dns_enabled の正体** ｜芯：同じ `ssm.ap-northeast-1.amazonaws.com` でも、VPC内から引けばエンドポイントのプライベートIP、外から引けばパブリックIP。「誰が聞くかで答えが変わる」仕組み。第8回の伏線回収。
+- [ ] **ALBをIPで参照してはいけない理由** ｜芯：ALBのIPはAWSが裏で付け替える（TTL 60秒）。だからoutputは `dns_name`。固定IPが要件なら NLB を選ぶ、という設計判断につながる。
+
+### AWS CLI / API の読み方
+- [ ] **`--filters` の `Name=` は2つの意味を持つ** ｜芯：`Name=tag:Name,Values=test_ec2` の最初の `Name=` は「フィルタ名の指定」という決まり文句、`tag:Name` がタグのキー名。`instance-state-name` はAWS定義済みのフィルタ名。
+  💬「`Name=instance-state-name` は要るの？ tag:Nameは自分で付けた名前だから分かる」
+- [ ] **terminateしたEC2は消えず `terminated` として約1時間残る** ｜芯：`describe-instances` は「状態を問わず全部」返す。タグだけで絞ると過去の残骸が混ざり、どれが生きているか分からない。「削除」ではなく「状態遷移」で捉えるのがAWSの流儀。
+- [ ] **`Reservations[].Instances[]` の2階建て** ｜芯：Reservation＝1回の起動リクエスト単位のまとまり。「3台まとめて起動」なら1 Reservationに3 Instances。EC2最初期からの歴史的構造。`[]` は配列を平らに開く記号（JMESPath）。
+  💬「`Reservations[].Instances[]` とは何？」
+- [ ] **`--query` は自分で選ぶ射影 ─ 出ないのは指定していないから** ｜芯：`.{ID:InstanceId,AZ:Placement.AvailabilityZone}` のように `{}` でキー名を付けると `--output table` にヘッダが付く。AZが `Placement` の下にあるのは配置情報（AZ・配置グループ・テナンシー）がそこにまとまっているため。
+  💬「これではどちらのAZにあるEC2か分からなくないですか？」
+- [ ] **`describe-scaling-activities` の Cause が一次ソース** ｜芯：ASGが「いつ・何を・なぜ」やったかの行動ログ。`Description`（何をしたか）と `Cause`（なぜか）は別フィールドで、証拠になるのは `Cause`。「新しいEC2が立った」だけでは自己修復の証明にならない。
+
 ## 全体を通じて言語化できるようになったこと
 - 「値の決定権を誰が持つか」で variable / data / locals / resource を説明できる
 - `count`（インデックス）と `for_each`（キー）の設計上の違い
@@ -406,3 +475,5 @@ ALB3点セット（本体/TG/リスナー）/ ALB(L7)vs NLB(L4) / SGソース=ci
 - コード（git）と state（リモートバックエンド）の責務分離
 - IAMのアイデンティティ／リソースベースの違い、ARNの構造
 - 「動いた」で止めず、`validate` が通っても誤りは残ると疑える姿勢
+- Terraformが管理する境界（宣言＝名詞）と、運用操作（実行＝動詞）の線引き
+- 可用性は障害の排除ではなく検知・復旧時間の最小化であり、速い検知と誤検知はトレードオフだということ
