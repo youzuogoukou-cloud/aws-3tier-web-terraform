@@ -60,6 +60,14 @@ resource "aws_lb_target_group" "alb_tg" {
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
   target_type = "instance"
+  health_check {
+    interval            = 30
+    unhealthy_threshold = 2
+    port                = "80"
+    protocol            = "HTTP"
+    path                = "/"
+    matcher             = "200"
+  }
 }
 
 resource "aws_lb_listener" "alb_listener" {
@@ -115,7 +123,6 @@ resource "aws_autoscaling_group" "asg" {
   vpc_zone_identifier = var.private_subnet_ids
   target_group_arns   = [aws_lb_target_group.alb_tg.arn]
   health_check_type   = "ELB"
-
 
   launch_template {
     id      = aws_launch_template.launch_temp.id
