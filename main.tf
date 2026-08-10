@@ -40,6 +40,14 @@ module "compute" {
   vpc_id             = module.network.vpc_id
   public_subnet_ids  = values(module.network.public_subnet_ids)
   private_subnet_ids = values(module.network.private_subnet_ids)
+}
 
+module "database" {
+  source = "./modules/database/"
+
+  project_name       = var.project_name
+  vpc_id             = module.network.vpc_id
+  private_subnet_ids = values(module.network.private_subnet_ids)
+  ec2_sg_id          = module.compute.ec2_sg_id
 }
 
