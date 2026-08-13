@@ -106,7 +106,6 @@ flowchart TB
 │       ├── variables.tf
 │       └── outputs.tf
 └── docs/
-    ├── learning-log.md          # 構築の過程と設計判断の記録
     └── before-modularization.tf # モジュール化前の一枚岩構成（学習用アーカイブ）
 ```
 
@@ -353,10 +352,3 @@ nc -zv <rds_hostname> 3306
 | SG の egress が全開放 | RDS は `egress = []` だが、EC2・ALB・VPCエンドポイントの SG は `0.0.0.0/0` のまま。EC2 は VPCエンドポイントとリポジトリへの通信が必要なので完全には閉じられないが、**443 と VPC CIDR に絞る余地がある** |
 | **AMI を固定していない** | `data "aws_ami"` の `most_recent = true` と起動テンプレートの `version = "$Latest"` により、新しい AMI が公開されると**次に起動するインスタンスから世代が変わる**（同一 ASG 内で世代が混ざりうる）。常に最新のパッチで起動できる利点と引き換えに再現性を失っている。本番では AMI ID を変数として固定し、更新は instance refresh で意図的に行うべき |
 | **httpd を起動のたびにインストールしている** | `user_data` で `dnf install` するため、**起動が遅く、リポジトリへの到達性に依存する**（起動直後はヘルスチェックを通らない）。事前に焼き込んだ AMI にすれば解消するが、AMI をビルド・管理する仕組みが必要になる。配信物が静的ページ1枚の現状では見合わないと判断した |
-
-
----
-
-## 構築の記録
-
-構築の過程、つまずいた点、その場で解決した概念上の疑問は [docs/learning-log.md](docs/learning-log.md) に時系列で記録しています。単一 EC2 の最小構成から、変数化・`for_each`・モジュール化・S3 バックエンド・プライベート化・ALB 導入・Auto Scaling までの流れと、各段階での設計判断が追えます。
