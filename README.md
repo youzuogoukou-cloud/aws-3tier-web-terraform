@@ -44,6 +44,24 @@ flowchart TB
     EC2A -->|"MySQL :3306"| RDS
     EC2C --> RDS
     RDS -.->|"パスワードを生成・保管させる<br/>(シークレットは RDS が所有)"| SM
+
+    classDef network  fill:transparent,stroke:#8C4FFF,stroke-width:2px,color:#8C4FFF
+    classDef compute  fill:transparent,stroke:#ED7100,stroke-width:2px,color:#ED7100
+    classDef database fill:transparent,stroke:#527FFF,stroke-width:2px,color:#527FFF
+    classDef storage  fill:transparent,stroke:#7AA116,stroke-width:2px,color:#7AA116
+    classDef security fill:transparent,stroke:#DD344C,stroke-width:2px,color:#DD344C
+    classDef actor    fill:transparent,stroke:#879196,stroke-width:2px,color:#879196
+
+    class IGW,ALB,EPS network
+    class EC2A,EC2C,ASG compute
+    class RDS database
+    class S3EP storage
+    class SM security
+    class User actor
+
+    style VPC     fill:transparent,stroke:#8C4FFF,stroke-width:2px,color:#8C4FFF
+    style Public  fill:transparent,stroke:#7AA116,stroke-width:2px,color:#7AA116
+    style Private fill:transparent,stroke:#00A4A6,stroke-width:2px,color:#00A4A6
 ```
 
 > ASG と Secrets Manager を VPC の外に描いているのは、これらが**サブネットに存在するリソースではなく、リソースを制御する仕組み**だからです。ASG が起動した EC2 も、Secrets Manager が保管するパスワードも、Terraform の state には現れません。
