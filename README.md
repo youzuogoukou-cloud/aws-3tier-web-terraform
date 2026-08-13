@@ -73,7 +73,7 @@ flowchart TB
 | 5 | 複数リソースの生成 | **`for_each`**（`count` 不使用） | `count` はインデックス管理のため、中間要素の追加が後続リソースの作り直しを引き起こす。`for_each` はキー管理なのでその問題が起きない |
 | 6 | EC2 の管理 | **Launch Template + ASG**（`aws_instance` 不使用） | 単一インスタンスでは障害時に手動復旧が必要。ASG なら AZ 分散と自動置換が成立する。個体を修理せず入れ替える運用（Cattle, not Pets）に合わせている |
 | 7 | ASG のヘルスチェック | **`health_check_type = "ELB"`** | 既定の `"EC2"` はインスタンスのステータスチェックのみを見るため、**OSは生きているがWebサーバーが死んでいる状態を検知できない**。ALB のヘルスチェック結果を判定に含めることで、アプリケーション層の障害でも自動復旧する |
-| 8 | state の管理 | **S3 バックエンド**（`use_lockfile = true`） | state には機密情報が平文で含まれ、機械的なマージもできないため Git 管理は不可。S3 に置くことで共有と排他制御を両立する（Terraform 1.10 以降は DynamoDB 不要） |
+| 8 | state の管理 | **S3 バックエンド**（`use_lockfile = true`）＋ **`-backend-config` で環境差分を外出し** | state には機密情報が平文で含まれ、機械的なマージもできないため Git 管理は不可。S3 に置くことで共有と排他制御を両立する（Terraform 1.10 以降は DynamoDB 不要）。なお **`backend` ブロックには変数が使えない**（`init` の時点で必要な設定なので変数の評価が間に合わない）ため、バケット名などの環境依存の値は `backend.hcl` に外出しし、`encrypt` / `use_lockfile` のような**環境に依存しない方針だけをコードに残している** |
 | 9 | コードの分割 | **network / compute / database の3モジュール** | モジュール境界は「**依存が一方通行になる場所**」に引く。network が VPC・サブネットを出力し、compute がそれを受けて EC2 の SG を出力し、database がさらにそれを受ける。一方向なので循環参照が起きない |
 | 10 | タグ付け | **`provider` の `default_tags`** | `ManagedBy` / `Project` を全リソースへ自動付与し、各リソースには識別用の `Name` のみを書く。付け忘れが構造的に起きない |
 | 11 | RDS のマスターパスワード | **`manage_master_user_password = true`**（Secrets Manager に委譲） | `sensitive = true` を付けても state には**平文で保存される**ため、「隠す」というアプローチでは解決しない。Terraform がパスワードを一度も受け取らない構造にし、state に残るのは Secrets Manager の ARN だけにした。**秘密を隠すのではなく、そもそも持たない** |
@@ -91,6 +91,7 @@ flowchart TB
 ├── variables.tf            # 入力変数（リージョン・CIDR・インスタンスタイプ等）
 ├── locals.tf               # 全リソース共通タグ
 ├── outputs.tf              # ALB の DNS 名 / RDS のホスト名
+├── backend.hcl.example     # state 保存先の雛形（実物の backend.hcl は gitignore）
 ├── modules/
 │   ├── network/            # VPC・サブネット・ルート・IGW・VPCエンドポイント
 │   │   ├── main.tf
@@ -120,7 +121,23 @@ flowchart TB
 | AWS CLI | 認証情報の設定済み |
 | Session Manager Plugin | サーバーへ接続する場合のみ必要 |
 
-**state 保存用の S3 バケットは事前に用意し、[main.tf](main.tf) の `backend` ブロックを自身のバケット名に書き換えてください。**
+### state の保存先を指定する
+
+**state 保存用の S3 バケットは事前に用意してください。** バケット名などの環境依存の値は `main.tf` に直接書かず、`backend.hcl` に外出ししています。
+
+```bash
+cp backend.hcl.example backend.hcl
+```
+
+コピーしたファイルを開き、自身のバケット名に書き換えてください。
+
+```hcl
+bucket = "<your-state-bucket-name>"
+key    = "terraform.tfstate"
+region = "ap-northeast-1"
+```
+
+`backend.hcl` は `.gitignore` 済みです。**`backend` ブロックには変数が使えない**（`terraform init` の時点で必要な設定なので、変数の評価が間に合わない）ため、環境ごとの差分はこの仕組みで外から渡します。`main.tf` 側に残しているのは `encrypt` と `use_lockfile` ＝**環境が変わっても変わらない方針**だけです。
 
 ### 実行する IAM プリンシパルに必要な権限
 
@@ -143,8 +160,16 @@ EC2 に付与するロールとは**別主体**の話です。「作る権限」
 ## 使い方
 
 ```bash
-terraform init
+terraform init -backend-config=backend.hcl
 ```
+
+> **PowerShell の場合は引数を引用符で囲んでください。** `=` の前後で分割され `Too many command line arguments` になります。
+>
+> ```powershell
+> terraform init "-backend-config=backend.hcl"
+> ```
+>
+> `backend.hcl` が必要なのは `init` のときだけです。backend の設定は `.terraform/` に記録されるため、以降の `plan` / `apply` では指定不要です。
 
 ```bash
 terraform fmt -recursive
@@ -329,7 +354,6 @@ nc -zv <rds_hostname> 3306
 | **AMI を固定していない** | `data "aws_ami"` の `most_recent = true` と起動テンプレートの `version = "$Latest"` により、新しい AMI が公開されると**次に起動するインスタンスから世代が変わる**（同一 ASG 内で世代が混ざりうる）。常に最新のパッチで起動できる利点と引き換えに再現性を失っている。本番では AMI ID を変数として固定し、更新は instance refresh で意図的に行うべき |
 | **httpd を起動のたびにインストールしている** | `user_data` で `dnf install` するため、**起動が遅く、リポジトリへの到達性に依存する**（起動直後はヘルスチェックを通らない）。事前に焼き込んだ AMI にすれば解消するが、AMI をビルド・管理する仕組みが必要になる。配信物が静的ページ1枚の現状では見合わないと判断した |
 
-> このリポジトリを公開する場合、`backend` ブロックのバケット名に AWS アカウントIDが含まれている点にご注意ください。
 
 ---
 

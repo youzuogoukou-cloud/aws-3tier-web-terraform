@@ -6,9 +6,6 @@ terraform {
     }
   }
   backend "s3" {
-    bucket       = "tf-portfolio-state-533266981533-ap-northeast-1-an"
-    key          = "terraform.tfstate"
-    region       = "ap-northeast-1"
     use_lockfile = true
     encrypt      = true
   }
