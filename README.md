@@ -260,7 +260,15 @@ mysql -h <rds_hostname> -u admin -p
 SHOW DATABASES;
 ```
 
-`portfolio_web_db` が一覧に表示されれば、`db_name` で指定したデータベースが作成されています。
+`portfolio_web_db` が一覧に表示されれば、`db_name` で指定したデータベースが作成されています。他の4つは MySQL が管理用に持つシステムデータベースです。
+
+確認が終わったら、**`exit` を2回**打って手元の端末まで戻ります。ここでシェルが3階層になっているので、どこにいるかを意識してください。
+
+```
+手元の端末
+ └─ SSM セッション（EC2）
+     └─ mysql クライアント
+```
 
 ### 到達できないことを確認する
 
@@ -272,11 +280,19 @@ nslookup <rds_hostname>
 
 **プライベートIP（`10.0.x.x`）が返ります。** パブリック DNS が VPC 内のアドレスを答えるので、ホスト名もアドレスも秘密ではありません。それでも接続はできません。
 
+Windows (PowerShell) の場合:
+
 ```powershell
 Test-NetConnection <rds_hostname> -Port 3306
 ```
 
-`TcpTestSucceeded : False` になります。**このデータ層を守っているのは情報の秘匿ではなく、経路の遮断です。**
+macOS / Linux の場合:
+
+```bash
+nc -zv <rds_hostname> 3306
+```
+
+`TcpTestSucceeded : False`（`nc` なら接続タイムアウト）になります。**このデータ層を守っているのは情報の秘匿ではなく、経路の遮断です。** 数分前まで EC2 から実際にクエリを流していた相手に、手元の端末からは届きません。
 
 ---
 
