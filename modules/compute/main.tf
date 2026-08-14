@@ -103,6 +103,12 @@ resource "aws_launch_template" "launch_temp" {
   user_data = base64encode(<<-EOF
             #!/bin/bash
             dnf install -y httpd
+            cat > /etc/httpd/conf.d/alb.conf << 'CONF'
+            RemoteIPHeader X-Forwarded-For
+            RemoteIPTrustedProxy 10.0.0.0/16
+            LogFormat "%h %l %u %t \"%r\" %>s %b \"%%{Referer}i\" \"%%{User-Agent}i\" %%{c}a" alb_combined
+            CustomLog "logs/access_alb_log" alb_combined
+            CONF
             systemctl enable --now httpd
             echo "<h1>Hello from $(hostname)</h1>" > /var/www/html/index.html
   EOF
