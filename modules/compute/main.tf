@@ -194,8 +194,8 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
           "logs:DescribeLogStreams"
         ],
         "Resource" : [
-          var.ec2_accesslog_arn,
-          var.ec2_errorlog_arn
+          "${var.ec2_accesslog_arn}:log-stream:*",
+          "${var.ec2_errorlog_arn}:log-stream:*"
         ]
       }
     ]
