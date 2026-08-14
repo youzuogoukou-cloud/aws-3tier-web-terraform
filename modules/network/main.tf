@@ -83,10 +83,10 @@ resource "aws_security_group" "endpoint_sg" {
   tags = { Name = "${var.project_name}_endpoint_sg" }
 }
 
-resource "aws_vpc_endpoint" "vpc_endpoint_ssm" {
+resource "aws_vpc_endpoint" "vpc_endpoint_interface" {
   vpc_id = aws_vpc.main.id
 
-  for_each            = toset(["ssm", "ec2messages", "ssmmessages"])
+  for_each            = toset(["ssm", "ec2messages", "ssmmessages", "logs"])
   service_name        = "com.amazonaws.${var.region}.${each.key}"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = [for k, v in var.private_subnets : aws_subnet.private_subnet[k].id]

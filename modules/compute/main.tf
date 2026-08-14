@@ -102,6 +102,33 @@ resource "aws_launch_template" "launch_temp" {
 
   user_data = base64encode(<<-EOF
             #!/bin/bash
+            dnf install -y amazon-cloudwatch-agent
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'AGENT'
+            {
+              "logs": {
+                "logs_collected": {
+                  "files": {
+                    "collect_list": [
+                    {
+                      "file_path": "/var/log/httpd/access_alb_log",
+                      "log_group_name": "${var.ec2_accesslog_name}",
+                      "log_stream_name": "{instance_id}"
+                    },{
+                      "file_path": "/var/log/httpd/error_log",
+                      "log_group_name": "${var.ec2_errorlog_name}",
+                      "log_stream_name": "{instance_id}"
+                    },{
+                      "file_path": "/var/log/cloud-init-output.log",
+                      "log_group_name": "${var.ec2_errorlog_name}",
+                      "log_stream_name": "{instance_id}"
+                    }
+                    ]
+                  }
+                }
+              }
+            }
+            AGENT
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
             dnf install -y httpd
             cat > /etc/httpd/conf.d/alb.conf << 'CONF'
             RemoteIPHeader X-Forwarded-For
