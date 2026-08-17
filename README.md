@@ -4,6 +4,8 @@ Terraform で構築する、**インターネットに公開しつつサーバ�
 ALB を公開層に置き、実際にリクエストを処理する EC2 はパブリックIPを持たないプライベートサブネットに配置します。EC2 は Auto Scaling Group が管理し、アプリケーション層の障害を検知して自動的に入れ替えます。
 データ層の RDS (MySQL) も同じプライベートサブネットに置き、EC2 のセキュリティグループからの 3306 番のみを許可します。マスターパスワードは Secrets Manager が生成・保管するため、**Terraform はパスワードを一度も受け取りません**。
 
+サーバーが使い捨てである以上、その中に残したログも一緒に捨てられます。そこで httpd と cloud-init のログは CloudWatch Logs へ転送し、**障害の記録がインスタンスの寿命より長く残る**ようにしています。
+
 「動くこと」ではなく **「なぜその構成にしたか」を説明できること** を目的に、設計判断とその理由を [設計判断](#設計判断) に明記しています。
 
 ---
@@ -24,7 +26,7 @@ flowchart TB
         subgraph Private["プライベートサブネット &nbsp;10.0.1.0/24 (a) / 10.0.2.0/24 (c)"]
             EC2A["EC2 / httpd&nbsp;(AZ-a)"]
             EC2C["EC2 / httpd&nbsp;(AZ-c)"]
-            EPS["Interface Endpoints<br/>ssm / ssmmessages / ec2messages"]
+            EPS["Interface Endpoints<br/>ssm / ssmmessages / ec2messages / logs"]
             RDS[("RDS MySQL 8.4<br/>rds_sg: inbound 3306 from ec2_sg のみ<br/>publicly_accessible = false")]
         end
 
@@ -33,6 +35,7 @@ flowchart TB
 
     ASG[["Auto Scaling Group<br/>desired=2 / health_check_type=ELB"]]
     SM[["Secrets Manager<br/>マスターパスワードを生成・保管"]]
+    CWL[["CloudWatch Logs<br/>accesslog / errorlog &nbsp;(保持90日)"]]
 
     User -->|HTTP :80| IGW --> ALB
     ALB -->|"HTTP :80 / local route<br/>ec2_sg: inbound 80 from alb_sg のみ"| EC2A
@@ -41,6 +44,7 @@ flowchart TB
     ASG -.-> EC2C
     EC2A -.->|HTTPS :443| EPS
     EC2A -.->|dnf install httpd| S3EP
+    EPS -.->|"CloudWatch Agent が送信<br/>(httpd の access / error, cloud-init)"| CWL
     EC2A -->|"MySQL :3306"| RDS
     EC2C --> RDS
     RDS -.->|"パスワードを生成・保管させる<br/>(シークレットは RDS が所有)"| SM
@@ -50,6 +54,7 @@ flowchart TB
     classDef database fill:transparent,stroke:#527FFF,stroke-width:2px,color:#527FFF
     classDef storage  fill:transparent,stroke:#7AA116,stroke-width:2px,color:#7AA116
     classDef security fill:transparent,stroke:#DD344C,stroke-width:2px,color:#DD344C
+    classDef mgmt     fill:transparent,stroke:#E7157B,stroke-width:2px,color:#E7157B
     classDef actor    fill:transparent,stroke:#879196,stroke-width:2px,color:#879196
 
     class IGW,ALB,EPS network
@@ -57,6 +62,7 @@ flowchart TB
     class RDS database
     class S3EP storage
     class SM security
+    class CWL mgmt
     class User actor
 
     style VPC     fill:transparent,stroke:#8C4FFF,stroke-width:2px,color:#8C4FFF
@@ -64,7 +70,7 @@ flowchart TB
     style Private fill:transparent,stroke:#00A4A6,stroke-width:2px,color:#00A4A6
 ```
 
-> ASG と Secrets Manager を VPC の外に描いているのは、これらが**サブネットに存在するリソースではなく、リソースを制御する仕組み**だからです。ASG が起動した EC2 も、Secrets Manager が保管するパスワードも、Terraform の state には現れません。
+> ASG・Secrets Manager・CloudWatch Logs を VPC の外に描いているのは、これらが**サブネットに存在するリソースではなく、リソースの外側から支える仕組み**だからです。ASG が起動した EC2 も、Secrets Manager が保管するパスワードも、Terraform の state には現れません。CloudWatch Logs は**ロググループだけが Terraform の管理対象**で、その中のログストリームは EC2 が実行時に作ります。
 
 **通信の流れ**
 
@@ -73,6 +79,7 @@ flowchart TB
 3. EC2 はパブリックIPを持たないが、同一VPC内の **local ルート** で到達できるため応答できる
 4. EC2 から AWS API への通信（SSM・S3）は、インターネットを経由せず **VPCエンドポイント** を通る
 5. EC2 から RDS への通信も同じ local ルートで成立する。RDS は `publicly_accessible = false` かつ SG が EC2 からの 3306 番しか受け付けないため、**VPC の外からは経路そのものが存在しない**
+6. EC2 上の CloudWatch Agent が httpd のログを読み、`logs` の Interface エンドポイント経由で CloudWatch Logs へ送る。**インスタンスが ASG に入れ替えられてもログは残る**
 
 > DB サブネットグループには 1a / 1c の両方を登録していますが、Single-AZ 構成なので **RDS の実体はどちらか一方の AZ にしか存在しません**。サブネットグループは「配置してよい範囲の宣言」であり、「そこ全部に置く」という意味ではありません。
 
@@ -92,12 +99,14 @@ flowchart TB
 | 6 | EC2 の管理 | **Launch Template + ASG**（`aws_instance` 不使用） | 単一インスタンスでは障害時に手動復旧が必要。ASG なら AZ 分散と自動置換が成立する。個体を修理せず入れ替える運用（Cattle, not Pets）に合わせている |
 | 7 | ASG のヘルスチェック | **`health_check_type = "ELB"`** | 既定の `"EC2"` はインスタンスのステータスチェックのみを見るため、**OSは生きているがWebサーバーが死んでいる状態を検知できない**。ALB のヘルスチェック結果を判定に含めることで、アプリケーション層の障害でも自動復旧する |
 | 8 | state の管理 | **S3 バックエンド**（`use_lockfile = true`）＋ **`-backend-config` で環境差分を外出し** | state には機密情報が平文で含まれ、機械的なマージもできないため Git 管理は不可。S3 に置くことで共有と排他制御を両立する（Terraform 1.10 以降は DynamoDB 不要）。なお **`backend` ブロックには変数が使えない**（`init` の時点で必要な設定なので変数の評価が間に合わない）ため、バケット名などの環境依存の値は `backend.hcl` に外出しし、`encrypt` / `use_lockfile` のような**環境に依存しない方針だけをコードに残している** |
-| 9 | コードの分割 | **network / compute / database の3モジュール** | モジュール境界は「**依存が一方通行になる場所**」に引く。network が VPC・サブネットを出力し、compute がそれを受けて EC2 の SG を出力し、database がさらにそれを受ける。一方向なので循環参照が起きない |
+| 9 | コードの分割 | **network / compute / database / logging の4モジュール** | モジュール境界は「**依存が一方通行になる場所**」に引く。network が VPC・サブネットを出力し、compute がそれを受けて EC2 の SG を出力し、database がさらにそれを受ける。logging はロググループを出力し、compute がそれを受ける（**logging → compute** の向き）。一方向なので循環参照が起きない。<br><br>この原則は**ログ書き込み権限の置き場所にも効いている**。採用している `aws_iam_role_policy`（インラインポリシー）は**ポリシーの定義とロールへの接続が1つのリソースに融合している**ため、ロールのある compute にしか置けない。logging に置けば logging→compute（ロール）と compute→logging（ロググループ ARN）が双方向になり **`Error: Cycle`** で通らない。<br><br>ただしこれは**書き方に依存する制約**であって絶対ではない。`aws_iam_policy` ＋ `aws_iam_role_policy_attachment` に分ければ、**ポリシーの定義はロググループ ARN しか参照しないので logging に置け**、ロールを要する接続だけが compute に残る（依存は一方向のまま）。**書き込み手が複数ロールに増えたらこちらが正しい形**になるが、現状は EC2 のロール1つなので、**ロールと運命を共にするインラインポリシー**の方が扱いやすいと判断した |
 | 10 | タグ付け | **`provider` の `default_tags`** | `ManagedBy` / `Project` を全リソースへ自動付与し、各リソースには識別用の `Name` のみを書く。付け忘れが構造的に起きない |
 | 11 | RDS のマスターパスワード | **`manage_master_user_password = true`**（Secrets Manager に委譲） | `sensitive = true` を付けても state には**平文で保存される**ため、「隠す」というアプローチでは解決しない。Terraform がパスワードを一度も受け取らない構造にし、state に残るのは Secrets Manager の ARN だけにした。**秘密を隠すのではなく、そもそも持たない** |
 | 12 | RDS の SG のアウトバウンド | **`egress = []`**（明示的にゼロ） | Terraform は SG 作成時に AWS が自動付与する全許可ルールを削除するため、未記載でも結果は同じ。それでも書くのは、**アウトバウンドがゼロなのは意図なのか記述漏れなのかを、読んだ人が区別できるようにする**ため |
 | 13 | ターゲットグループのヘルスチェック | **`health_check` ブロックを明示**（値は既定と同一） | 既定値のままだと「検討した結果その値なのか」「知らなかっただけなのか」が区別できない。インフラの挙動は1ミリも変わらないが、**明示は AWS のためではなく人間のため**。コードを設計判断の記録として扱っている |
 | 14 | AWS 任せになっていた決定 | **`identifier` とメンテナンス／バックアップ window を明示** | 未記載なら AWS がインスタンス名を自動生成し、メンテナンスの実行時刻も勝手に選ぶ。明示することで**決定の主体をコード側に取り戻した**。なおウィンドウは「開始してよい枠」であって完了保証ではないため、両者の間に30分のバッファを置いている |
+| 15 | ロググループの分割と保持期間 | **accesslog / errorlog の2グループ**・**両方とも `retention_in_days = 90`** | **分けた理由**：ロググループは保持期間・IAM 権限・メトリクスフィルタの単位であり、**将来アクセスログだけ扱いを変える余地**を残したかった。加えて、一度混ぜたログは**遡って分離できない**（コードは後から変えられるがデータは変えられない）ため、可逆な側を選んだ。<br><br>**揃えた理由**：当初は access 14日 / error 365日で考えていたが、**障害調査では両方を突き合わせて読む**。片方だけ消えていれば残った側も使えないので、「一緒に見るログは一緒に消える」べきと判断して統一した。<br><br>**90日の根拠**：CloudTrail のイベント履歴・GuardDuty / Security Hub の検出結果がいずれも90日であり、「**直近90日はすぐ検索できる場所、それ以前は安価な長期保管**」という2段構えが業界の定石になっている。その短期側の境界に合わせた。**長期側（S3 への移送）は未実装**であり、[既知の制約](#既知の制約と今後の予定)に記載している。なお `retention_in_days` の**既定は無期限**なので、無記載は「安全側」ではなく「無限に課金され続ける」選択になる |
+| 16 | アクセスログのクライアントIP | **`mod_remoteip` + `X-Forwarded-For`**（`%h` と `%{c}a` を両方記録） | ALB はリクエストを終端して**新しい接続を張り直す**ため、何もしなければ Apache が記録する送信元は**すべて ALB のプライベートIP**になる。攻撃元の特定も地域別の分析も一切できず、**アクセスログの価値がほぼ失われる**。<br><br>`RemoteIPHeader X-Forwarded-For` で実クライアントIPを復元しつつ、`%{c}a`（実際の TCP 接続元＝ALB）も**同じ行に残している**。復元値だけにすると「どの経路で来たか」が消えるため。<br><br>`RemoteIPTrustedProxy 10.0.0.0/16` で **VPC 内から来た `X-Forwarded-For` しか信用しない**。このヘッダーはクライアントが自由に詐称できるので、**信頼するプロキシを限定しなければ、IPベースの調査や制限を回避する手段を与えることになる** |
 
 ---
 
@@ -119,7 +128,11 @@ flowchart TB
 │   │   ├── main.tf
 │   │   ├── variables.tf
 │   │   └── outputs.tf
-│   └── database/           # RDS (MySQL)・DBサブネットグループ・SG
+│   ├── database/           # RDS (MySQL)・DBサブネットグループ・SG
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   └── logging/            # CloudWatch ロググループ（accesslog / errorlog）
 │       ├── main.tf
 │       ├── variables.tf
 │       └── outputs.tf
@@ -167,6 +180,7 @@ EC2 に付与するロールとは**別主体**の話です。「作る権限」
 | RDS | `AmazonRDSFullAccess` 相当 | DB インスタンス・サブネットグループの作成 |
 | **KMS** | `kms:ListAliases` / `kms:DescribeKey` / `kms:CreateGrant` / `kms:GenerateDataKey` | `storage_encrypted = true` が KMS を使うため。**`AmazonRDSFullAccess` に KMS 権限は含まれていません** |
 | **Secrets Manager** | `secretsmanager:CreateSecret` / `DeleteSecret` | `manage_master_user_password = true` がシークレットを作成するため |
+| **CloudWatch Logs** | `CloudWatchLogsFullAccess` 相当（ロググループの作成・保持期間の設定・タグ付け・削除） | `modules/logging` がロググループを作成するため。**EC2 がログを書き込む権限とは別主体**（後者は EC2 のロールにインラインポリシーで付与している） |
 
 > AWS 管理ポリシーは**そのサービスの操作しかカバーしません**。RDS が裏で KMS や Secrets Manager を呼ぶ構成では、呼ばれる側の権限を別途付与する必要があります。
 >
@@ -268,6 +282,63 @@ ASG が実行した操作とその理由は、以下で確認できます。
 aws autoscaling describe-scaling-activities --auto-scaling-group-name portfolio-web_asg --query "Activities[].Cause" --output text
 ```
 
+### ログが CloudWatch に届いていることを確認する
+
+上の検証で終了したインスタンスは、**その中のログごと消えています**。ここで確認するのは、同じログが CloudWatch Logs 側に残っているかどうかです。
+
+まずロググループにストリームが作られているかを見ます。ストリーム名はインスタンスIDになります。
+
+```bash
+aws logs describe-log-streams --log-group-name portfolio-web/ec2/accesslog --query "logStreams[].logStreamName" --output text
+```
+
+> **ストリームが空の場合、ログは1件も届いていません。** `apply` が成功していてもここは空になり得ます。原因の切り分けは[トラブルシューティング](#ログが届かない場合)を参照してください。
+
+次に、自分のリクエストが**実クライアントIPで記録されているか**を確かめます。目印になるクエリ文字列を付けてアクセスし、その行だけを抜き出します。
+
+```bash
+curl "http://$(terraform output -raw alb_dns_name)/?mytest=CLIENT_CHECK"
+```
+
+```bash
+aws logs filter-log-events --log-group-name portfolio-web/ec2/accesslog --filter-pattern "CLIENT_CHECK" --query "events[].message" --output text
+```
+
+以下のような行が返ります。
+
+```
+203.0.113.10 - - [17/Aug/2026:12:34:56 +0000] "GET /?mytest=CLIENT_CHECK HTTP/1.1" 200 65 "-" "curl/8.4.0" 10.0.101.249
+```
+
+| 位置 | 値 | 意味 |
+|---|---|---|
+| 先頭 (`%h`) | `203.0.113.10` | **アクセス元の公開IP**。`mod_remoteip` が `X-Forwarded-For` から復元したもの |
+| 末尾 (`%{c}a`) | `10.0.101.249` | **ALB のプライベートIP**。実際に TCP 接続してきた相手 |
+
+**両方が同じ行に並んでいることが、`mod_remoteip` が機能している証拠です。** 設定前は先頭も ALB のIPになります。
+
+同じログには ALB のヘルスチェック（30秒間隔・User-Agent が `ELB-HealthChecker/2.0`）も記録されます。**実際のユーザーからのリクエストと区別できる**ため、「アプリが悪いのか経路が悪いのか」の切り分けに使えます。
+
+`filter-log-events` はストリームを指定せず**グループ全体を横断して検索します**。終了済みインスタンスのIDを知らなくても該当行を取り出せるのは、この検証にとって本質的です。
+
+### ログが届かない場合
+
+`apply` の成功はログの到達を保証しません。**ロググループの作成と、そこへの書き込み権限は別物**だからです。IAM はロググループの実在も権限の妥当性も検証しないため、権限が不足していても `apply` は正常終了します。
+
+原因はエージェント自身のログに記録されています。
+
+```bash
+aws ssm send-command --instance-ids <インスタンスID> --document-name AWS-RunShellScript --parameters 'commands=["tail -50 /opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log"]'
+```
+
+```bash
+aws ssm get-command-invocation --command-id <上で返ったID> --instance-id <インスタンスID> --query "StandardOutputContent" --output text
+```
+
+> 実際にこの構成で発生した例：`AccessDeniedException: not authorized to perform logs:PutLogEvents on resource: ...log-group:portfolio-web/ec2/accesslog:log-stream:i-xxxx`
+>
+> IAM ポリシーの `Resource` をロググループの ARN ちょうどに書いていたことが原因でした。`PutLogEvents` の対象は**グループ配下のログストリーム**であり、`aws_cloudwatch_log_group.x.arn` には `:log-stream:` 以降が含まれません。`"${arn}:log-stream:*"` まで書いて解決しています。
+
 `an instance was taken out of service in response to an ELB system health check failure` が記録されていれば、`health_check_type = "ELB"` による自動復旧が機能しています。
 
 ### データ層に接続する
@@ -365,7 +436,8 @@ nc -zv <rds_hostname> 3306
 | スケーリングポリシー未実装 | 現在は `min = desired = max = 2` の固定構成。**可用性は満たすがスケーラビリティは未対応**。負荷に応じた増減を入れるには `max_size` に余裕が必要 |
 | RDS が Single-AZ | `multi_az = false`。稼働時間の短い学習環境のためコストを優先した。本番では AZ 障害対策に加え、**計画メンテナンス時のダウンタイム短縮**のために `true` にすべき |
 | バックアップ保持が1日 | `backup_retention_period = 1`。ポイントインタイムリカバリで戻せる範囲が24時間しかない。本番では RPO の要件に応じて延ばす |
-| ログが永続化されていない | インスタンス内のログは入れ替えとともに消える。CloudWatch Logs への転送と CloudTrail 証跡の作成を予定 |
+| **ログの長期保管が未実装** | httpd と cloud-init のログは CloudWatch Logs に転送済みだが、**保持は90日まで**で、それ以降は失われる。「直近はすぐ検索できる場所、それ以前は安価な長期保管」という2段構えのうち、**下半分（S3 / Glacier への移送）が無い**状態。監査や長期の後追い調査には対応できない。ライフサイクルによる階層化は入れられるが、**この規模と用途では移送の運用コストに見合わないと判断して見送っている** |
+| **CloudTrail 証跡が未作成** | 誰がどの AWS API を呼んだかの記録が、コンソールのイベント履歴（90日・保存なし）に頼りきりになっている。**IAM 権限を実績ベースで絞り込む**（CloudTrail → IAM Access Analyzer でポリシーを生成する）にも証跡が前提になるため、次に着手する予定 |
 | HTTPS 未対応 | ACM 証明書と 443 リスナー、HTTP からのリダイレクトが未実装。**独自ドメインの取得が前提になる**ため、学習環境では優先度を下げた |
 | SG の egress が全開放 | RDS は `egress = []` だが、EC2・ALB・VPCエンドポイントの SG は `0.0.0.0/0` のまま。EC2 は VPCエンドポイントとリポジトリへの通信が必要なので完全には閉じられないが、**443 と VPC CIDR に絞る余地がある** |
 | **AMI を固定していない** | `data "aws_ami"` の `most_recent = true` と起動テンプレートの `version = "$Latest"` により、新しい AMI が公開されると**次に起動するインスタンスから世代が変わる**（同一 ASG 内で世代が混ざりうる）。常に最新のパッチで起動できる利点と引き換えに再現性を失っている。本番では AMI ID を変数として固定し、更新は instance refresh で意図的に行うべき |
