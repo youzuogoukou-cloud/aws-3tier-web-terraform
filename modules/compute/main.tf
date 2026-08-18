@@ -97,6 +97,10 @@ resource "aws_launch_template" "launch_temp" {
   image_id               = data.aws_ami.amazon_linux.id
   instance_type          = var.instance_type
   vpc_security_group_ids = [aws_security_group.ec2_sg.id]
+  metadata_options {
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
 
   iam_instance_profile { name = aws_iam_instance_profile.ssm_profile.name }
 
