@@ -6,6 +6,8 @@ ALB を公開層に置き、実際にリクエストを処理する EC2 はパ�
 
 サーバーが使い捨てである以上、その中に残したログも一緒に捨てられます。そこで httpd と cloud-init のログは CloudWatch Logs へ転送し、**障害の記録がインスタンスの寿命より長く残る**ようにしています。
 
+さらに「誰がどの AWS API を呼んだか」の監査証跡は、アプリとは寿命（ライフサイクル）が異なるため、**独立した基盤 (`foundation/`) として CloudTrail で常時記録**しています。アプリを `destroy` しても証跡は残ります（詳細は [設計判断 #17](#設計判断)）。
+
 「動くこと」ではなく **「なぜその構成にしたか」を説明できること** を目的に、設計判断とその理由を [設計判断](#設計判断) に明記しています。
 
 ---
@@ -107,6 +109,8 @@ flowchart TB
 | 14 | AWS 任せになっていた決定 | **`identifier` とメンテナンス／バックアップ window を明示** | 未記載なら AWS がインスタンス名を自動生成し、メンテナンスの実行時刻も勝手に選ぶ。明示することで**決定の主体をコード側に取り戻した**。なおウィンドウは「開始してよい枠」であって完了保証ではないため、両者の間に30分のバッファを置いている |
 | 15 | ロググループの分割と保持期間 | **accesslog / errorlog の2グループ**・**両方とも `retention_in_days = 90`** | **分けた理由**：ロググループは保持期間・IAM 権限・メトリクスフィルタの単位であり、**将来アクセスログだけ扱いを変える余地**を残したかった。加えて、一度混ぜたログは**遡って分離できない**（コードは後から変えられるがデータは変えられない）ため、可逆な側を選んだ。<br><br>**揃えた理由**：当初は access 14日 / error 365日で考えていたが、**障害調査では両方を突き合わせて読む**。片方だけ消えていれば残った側も使えないので、「一緒に見るログは一緒に消える」べきと判断して統一した。<br><br>**90日の根拠**：CloudTrail のイベント履歴・GuardDuty / Security Hub の検出結果がいずれも90日であり、「**直近90日はすぐ検索できる場所、それ以前は安価な長期保管**」という2段構えが業界の定石になっている。その短期側の境界に合わせた。**長期側（S3 への移送）は未実装**であり、[既知の制約](#既知の制約と今後の予定)に記載している。なお `retention_in_days` の**既定は無期限**なので、無記載は「安全側」ではなく「無限に課金され続ける」選択になる |
 | 16 | アクセスログのクライアントIP | **`mod_remoteip` + `X-Forwarded-For`**（`%h` と `%{c}a` を両方記録） | ALB はリクエストを終端して**新しい接続を張り直す**ため、何もしなければ Apache が記録する送信元は**すべて ALB のプライベートIP**になる。攻撃元の特定も地域別の分析も一切できず、**アクセスログの価値がほぼ失われる**。<br><br>`RemoteIPHeader X-Forwarded-For` で実クライアントIPを復元しつつ、`%{c}a`（実際の TCP 接続元＝ALB）も**同じ行に残している**。復元値だけにすると「どの経路で来たか」が消えるため。<br><br>`RemoteIPTrustedProxy 10.0.0.0/16` で **VPC 内から来た `X-Forwarded-For` しか信用しない**。このヘッダーはクライアントが自由に詐称できるので、**信頼するプロキシを限定しなければ、IPベースの調査や制限を回避する手段を与えることになる** |
+| 17 | CloudTrail 証跡（`foundation/`）の配置 | **アプリとは別のルートモジュール（別 state）に分離** | 証跡とアプリは**寿命が違う**。アプリは `apply → 確認 → destroy` を繰り返す使い捨てだが、証跡は一度作ったら消してはいけない（消すと監査に空白ができる）。<br><br>Terraform の state は「**一緒に作られ、一緒に壊される単位**」だ。寿命の違うものを同じ state に入れると、アプリを `destroy` するたびに証跡まで巻き添えで消える。だから「Terraform に置かない」のではなく「**この state に置かない**」——別ルートにして backend の `key` だけ分け、証跡をアプリの destroy から切り離した。<br><br>同一 state のまま `prevent_destroy` で守る案もあったが、それでは destroy 自体が失敗して日々の運用が回らなくなるため採らなかった |
+| 18 | EC2 のメタデータアクセス（IMDS） | **`metadata_options` で IMDSv2 を強制**（`http_tokens = "required"`） | IMDS（`169.254.169.254`）はインスタンス内部からロールの一時クレデンシャルを取り出す仕組み。IMDSv1 は `GET` だけで応答するため、Web サーバーに SSRF があれば**インスタンスに侵入せずとも認証情報を盗める**。IMDSv2 は事前に `PUT` でトークンを取らせるため、`GET` しか撃てない SSRF を無効化する。<br><br>AL2023 の AMI は既定で IMDSv2 を強制しており（`ImdsSupport = v2.0`）、書かなくても現状は守られている。それでも明示するのは、セキュリティ制御を **AMI 任せにせず Terraform 側で保証する**ため、そして無記載を「v1 を許している」と誤読されないためだ。`http_put_response_hop_limit = 1` は、コンテナなど1ホップ先から IMDS へ到達させないための上乗せ |
 
 ---
 
@@ -136,6 +140,11 @@ flowchart TB
 │       ├── main.tf
 │       ├── variables.tf
 │       └── outputs.tf
+├── foundation/             # 別ルートモジュール（独立した state）＝CloudTrail 証跡＋ログ用 S3。分けた理由は設計判断 #17
+│   ├── main.tf             # 証跡・S3 バケット・バケットポリシー・public access block・versioning
+│   ├── variables.tf
+│   ├── locals.tf
+│   └── backend.hcl.example
 └── docs/
     └── before-modularization.tf # モジュール化前の一枚岩構成（学習用アーカイブ）
 ```
@@ -181,6 +190,8 @@ EC2 に付与するロールとは**別主体**の話です。「作る権限」
 | **KMS** | `kms:ListAliases` / `kms:DescribeKey` / `kms:CreateGrant` / `kms:GenerateDataKey` | `storage_encrypted = true` が KMS を使うため。**`AmazonRDSFullAccess` に KMS 権限は含まれていません** |
 | **Secrets Manager** | `secretsmanager:CreateSecret` / `DeleteSecret` | `manage_master_user_password = true` がシークレットを作成するため |
 | **CloudWatch Logs** | `CloudWatchLogsFullAccess` 相当（ロググループの作成・保持期間の設定・タグ付け・削除） | `modules/logging` がロググループを作成するため。**EC2 がログを書き込む権限とは別主体**（後者は EC2 のロールにインラインポリシーで付与している） |
+| **S3（CloudTrail 証跡バケット）** | 対象バケットへの `s3:*`（`CreateBucket`・バケットポリシー・public access block・versioning 等） | `foundation/` が証跡用の S3 バケットを新規作成・設定するため。**state バケットへの権限とは別**で、`s3:CreateBucket` を含む（アクションを1つずつ絞ると Terraform のリフレッシュが読む多数のサブ設定で権限不足になりやすいため、リソースをバケットに限定した上で `s3:*` を許可している） |
+| **CloudTrail** | `cloudtrail:CreateTrail` / `StartLogging` / `PutEventSelectors` / `AddTags` 等 | `foundation/` が証跡を作成するため。読み取り専用の `AWSCloudTrail_ReadOnlyAccess` には**作成系が含まれない** |
 
 > AWS 管理ポリシーは**そのサービスの操作しかカバーしません**。RDS が裏で KMS や Secrets Manager を呼ぶ構成では、呼ばれる側の権限を別途付与する必要があります。
 >
@@ -341,6 +352,26 @@ aws ssm get-command-invocation --command-id <上で返ったID> --instance-id <�
 
 `an instance was taken out of service in response to an ELB system health check failure` が記録されていれば、`health_check_type = "ELB"` による自動復旧が機能しています。
 
+### CloudTrail が記録しない権限を確かめる
+
+EC2 ロールのログ権限（`CreateLogStream` / `PutLogEvents` / `DescribeLogStreams`）は、`modules/compute` で**手書きのインラインポリシー**として必要な操作だけに絞っている。「CloudTrail の実績から自動生成すればいいのでは」と考えるのは自然だが、**それができない**ことを確認できる。
+
+エージェントが動いている状態で、CloudTrail に記録された呼び出しを2つ引く。
+
+```bash
+aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=CreateLogStream --max-results 5 --query "Events[].Username" --output text
+```
+
+```bash
+aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=PutLogEvents --max-results 5 --query "Events[].Username" --output text
+```
+
+`CreateLogStream` はインスタンスID（＝EC2 ロール）で複数件返るが、**`PutLogEvents` は0件**になる。エージェントは同じ瞬間に両方を呼んでいる（ストリームにログが届いているのが証拠）にもかかわらず、だ。
+
+理由は、`PutLogEvents` が**データイベント**であり、CloudTrail の記録対象に最初から含まれていないため。つまり CloudTrail から最小権限を自動生成するツール（IAM Access Analyzer）は、**ログを送る当の権限を必ず取りこぼす**。生成されたポリシーを適用しても `apply` は成功しエージェントも動いて見えるが、ログだけ届かない——[ログが届かない場合](#ログが届かない場合)と同じ静かな壊れ方になる。
+
+> **観測に基づく自動ツールは、「記録されていない」を「使っていない」と誤読する。生成結果は出発点であって、答えではない。** だからこの権限は手書きで絞っている。
+
 ### データ層に接続する
 
 マスターパスワードは Secrets Manager が保管しているため、まず取り出します。**このパスワードは Terraform の state には存在しません。**
@@ -436,8 +467,10 @@ nc -zv <rds_hostname> 3306
 | スケーリングポリシー未実装 | 現在は `min = desired = max = 2` の固定構成。**可用性は満たすがスケーラビリティは未対応**。負荷に応じた増減を入れるには `max_size` に余裕が必要 |
 | RDS が Single-AZ | `multi_az = false`。稼働時間の短い学習環境のためコストを優先した。本番では AZ 障害対策に加え、**計画メンテナンス時のダウンタイム短縮**のために `true` にすべき |
 | バックアップ保持が1日 | `backup_retention_period = 1`。ポイントインタイムリカバリで戻せる範囲が24時間しかない。本番では RPO の要件に応じて延ばす |
-| **ログの長期保管が未実装** | httpd と cloud-init のログは CloudWatch Logs に転送済みだが、**保持は90日まで**で、それ以降は失われる。「直近はすぐ検索できる場所、それ以前は安価な長期保管」という2段構えのうち、**下半分（S3 / Glacier への移送）が無い**状態。監査や長期の後追い調査には対応できない。ライフサイクルによる階層化は入れられるが、**この規模と用途では移送の運用コストに見合わないと判断して見送っている** |
-| **CloudTrail 証跡が未作成** | 誰がどの AWS API を呼んだかの記録が、コンソールのイベント履歴（90日・保存なし）に頼りきりになっている。**IAM 権限を実績ベースで絞り込む**（CloudTrail → IAM Access Analyzer でポリシーを生成する）にも証跡が前提になるため、次に着手する予定 |
+| **CloudWatch Logs の長期保管が未実装** | httpd と cloud-init のログは CloudWatch Logs に転送済みだが、**保持は90日まで**で、それ以降は失われる。「直近はすぐ検索できる場所、それ以前は安価な長期保管」という2段構えのうち、**下半分（S3 / Glacier への移送）が無い**状態。監査や長期の後追い調査には対応できない。ライフサイクルによる階層化は入れられるが、**この規模と用途では移送の運用コストに見合わないと判断して見送っている** |
+| **CloudTrail 証跡バケットのライフサイクル未設定** | 証跡は `foundation/` で作成済みで S3 に配信されるが、`aws_s3_bucket_lifecycle_configuration` が無いため、**古い証跡が S3 標準ストレージに無期限で溜まり続ける**。Glacier への階層化や一定期間での失効という「コールド側」が未実装。管理イベントのみなので増加は緩やかだが、コスト最適化の余地が残る |
+| **証跡バケットに Object Lock 未使用** | バージョニングとバケットポリシーで保護しているが、**書き込み後の改ざん・削除を物理的に不可能にする Object Lock は入れていない**。Object Lock はバケット作成時にしか有効化できず、COMPLIANCE モードは root でも解除できないため、**学習用アカウントで誤って削除不能になるリスクを避けて意図的に見送った**。なお改ざんの「検知」は `enable_log_file_validation`（ダイジェスト）で担保しており、これは「防止」とは別レイヤー |
+| **CloudTrail のデータイベント未記録** | 記録しているのは**管理イベント（制御・設定操作）のみ**。S3 オブジェクトの読み書きや Lambda 実行などの**データイベントは対象外**（追加課金と大量ログを避けるため）。誰が API を叩いたかは追えるが、「どのオブジェクトを読んだか」までは追えない |
 | HTTPS 未対応 | ACM 証明書と 443 リスナー、HTTP からのリダイレクトが未実装。**独自ドメインの取得が前提になる**ため、学習環境では優先度を下げた |
 | SG の egress が全開放 | RDS は `egress = []` だが、EC2・ALB・VPCエンドポイントの SG は `0.0.0.0/0` のまま。EC2 は VPCエンドポイントとリポジトリへの通信が必要なので完全には閉じられないが、**443 と VPC CIDR に絞る余地がある** |
 | **AMI を固定していない** | `data "aws_ami"` の `most_recent = true` と起動テンプレートの `version = "$Latest"` により、新しい AMI が公開されると**次に起動するインスタンスから世代が変わる**（同一 ASG 内で世代が混ざりうる）。常に最新のパッチで起動できる利点と引き換えに再現性を失っている。本番では AMI ID を変数として固定し、更新は instance refresh で意図的に行うべき |
