@@ -195,6 +195,7 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
         "Action" : [
           "logs:CreateLogStream",
           "logs:PutLogEvents",
+          #DescribeLogStreams はASGによるインスタンス置換、エージェントの再起動、ログローテーションで0件を確認したら削除する。列挙しきれないが、誤ってもエージェントのamazon-cloudwatch-agent.logにAccessDeniedが出て1行で復旧できるので、その条件で削除に踏み切る
           "logs:DescribeLogStreams"
         ],
         "Resource" : [
