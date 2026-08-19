@@ -85,3 +85,20 @@ resource "aws_s3_bucket_versioning" "versioning_cloudtrail" {
     status = "Enabled"
   }
 }
+
+resource "aws_s3_bucket_lifecycle_configuration" "lifecycle_cloudtrail" {
+  bucket = aws_s3_bucket.cloudtrail_bucket.id
+
+  rule {
+    filter {}
+    id                            = "expire-cloudtrail-logs"
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+
+    expiration {
+      days = 365
+    }
+    status                        = "Enabled"
+  }
+}
