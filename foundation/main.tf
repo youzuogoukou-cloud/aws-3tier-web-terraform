@@ -91,7 +91,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "lifecycle_cloudtrail" {
 
   rule {
     filter {}
-    id                            = "expire-cloudtrail-logs"
+    id = "expire-cloudtrail-logs"
     noncurrent_version_expiration {
       noncurrent_days = 30
     }
@@ -99,6 +99,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "lifecycle_cloudtrail" {
     expiration {
       days = 365
     }
-    status                        = "Enabled"
+    status = "Enabled"
   }
 }
