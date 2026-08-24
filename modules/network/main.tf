@@ -71,6 +71,7 @@ resource "aws_security_group" "endpoint_sg" {
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = [var.vpc_cidr_block]
+    description = "Allow HTTPS from within the VPC"
   }
 
   egress {
@@ -78,15 +79,20 @@ resource "aws_security_group" "endpoint_sg" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all outbound traffic"
   }
 
   tags = { Name = "${var.project_name}_endpoint_sg" }
 }
 
-resource "aws_vpc_endpoint" "vpc_endpoint_ssm" {
+resource "aws_default_security_group" "default" {
+  vpc_id = aws_vpc.main.id
+}
+
+resource "aws_vpc_endpoint" "vpc_endpoint_interface" {
   vpc_id = aws_vpc.main.id
 
-  for_each            = toset(["ssm", "ec2messages", "ssmmessages"])
+  for_each            = toset(["ssm", "ec2messages", "ssmmessages", "logs"])
   service_name        = "com.amazonaws.${var.region}.${each.key}"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = [for k, v in var.private_subnets : aws_subnet.private_subnet[k].id]
