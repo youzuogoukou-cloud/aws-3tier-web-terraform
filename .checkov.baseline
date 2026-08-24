@@ -1,0 +1,138 @@
+{
+    "failed_checks": [
+        {
+            "file": "\\foundation\\main.tf",
+            "findings": [
+                {
+                    "resource": "aws_cloudtrail.cloudtrail",
+                    "check_ids": [
+                        "CKV2_AWS_10",
+                        "CKV_AWS_252",
+                        "CKV_AWS_35"
+                    ]
+                },
+                {
+                    "resource": "aws_s3_bucket.cloudtrail_bucket",
+                    "check_ids": [
+                        "CKV2_AWS_62",
+                        "CKV_AWS_144",
+                        "CKV_AWS_145",
+                        "CKV_AWS_18"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "\\modules\\compute\\main.tf",
+            "findings": [
+                {
+                    "resource": "module.compute.aws_autoscaling_group.asg",
+                    "check_ids": [
+                        "CKV_AWS_153"
+                    ]
+                },
+                {
+                    "resource": "module.compute.aws_lb.alb",
+                    "check_ids": [
+                        "CKV2_AWS_20",
+                        "CKV2_AWS_28",
+                        "CKV_AWS_131",
+                        "CKV_AWS_150",
+                        "CKV_AWS_91"
+                    ]
+                },
+                {
+                    "resource": "module.compute.aws_lb_listener.alb_listener",
+                    "check_ids": [
+                        "CKV_AWS_103",
+                        "CKV_AWS_2"
+                    ]
+                },
+                {
+                    "resource": "module.compute.aws_lb_target_group.alb_tg",
+                    "check_ids": [
+                        "CKV_AWS_378"
+                    ]
+                },
+                {
+                    "resource": "module.compute.aws_security_group.alb_sg",
+                    "check_ids": [
+                        "CKV_AWS_260",
+                        "CKV_AWS_382"
+                    ]
+                },
+                {
+                    "resource": "module.compute.aws_security_group.ec2_sg",
+                    "check_ids": [
+                        "CKV_AWS_382"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "\\modules\\database\\main.tf",
+            "findings": [
+                {
+                    "resource": "module.database.aws_db_instance.rds",
+                    "check_ids": [
+                        "CKV2_AWS_60",
+                        "CKV_AWS_118",
+                        "CKV_AWS_129",
+                        "CKV_AWS_157",
+                        "CKV_AWS_161",
+                        "CKV_AWS_226",
+                        "CKV_AWS_293"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "\\modules\\logging\\main.tf",
+            "findings": [
+                {
+                    "resource": "module.logging.aws_cloudwatch_log_group.ec2_accesslog",
+                    "check_ids": [
+                        "CKV_AWS_158",
+                        "CKV_AWS_338"
+                    ]
+                },
+                {
+                    "resource": "module.logging.aws_cloudwatch_log_group.ec2_errorlog",
+                    "check_ids": [
+                        "CKV_AWS_158",
+                        "CKV_AWS_338"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "\\modules\\network\\main.tf",
+            "findings": [
+                {
+                    "resource": "module.network.aws_security_group.endpoint_sg",
+                    "check_ids": [
+                        "CKV_AWS_382"
+                    ]
+                },
+                {
+                    "resource": "module.network.aws_subnet.public_subnet[\"a\"]",
+                    "check_ids": [
+                        "CKV_AWS_130"
+                    ]
+                },
+                {
+                    "resource": "module.network.aws_subnet.public_subnet[\"c\"]",
+                    "check_ids": [
+                        "CKV_AWS_130"
+                    ]
+                },
+                {
+                    "resource": "module.network.aws_vpc.main",
+                    "check_ids": [
+                        "CKV2_AWS_11"
+                    ]
+                }
+            ]
+        }
+    ]
+}
