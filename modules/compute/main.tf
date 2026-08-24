@@ -8,6 +8,7 @@ resource "aws_security_group" "ec2_sg" {
     to_port         = 80
     protocol        = "tcp"
     security_groups = [aws_security_group.alb_sg.id]
+    description     = "Allow HTTP from the ALB only"
   }
 
   egress {
@@ -15,6 +16,7 @@ resource "aws_security_group" "ec2_sg" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all outbound traffic"
   }
 
   tags = { Name = "${var.project_name}_ec2_sg" }
@@ -30,6 +32,7 @@ resource "aws_security_group" "alb_sg" {
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow HTTP from internet"
   }
 
   egress {
@@ -37,6 +40,7 @@ resource "aws_security_group" "alb_sg" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all outbound traffic"
   }
 
   tags = { Name = "${var.project_name}_alb_sg" }
@@ -97,12 +101,49 @@ resource "aws_launch_template" "launch_temp" {
   image_id               = data.aws_ami.amazon_linux.id
   instance_type          = var.instance_type
   vpc_security_group_ids = [aws_security_group.ec2_sg.id]
+  metadata_options {
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
 
   iam_instance_profile { name = aws_iam_instance_profile.ssm_profile.name }
 
   user_data = base64encode(<<-EOF
             #!/bin/bash
+            dnf install -y amazon-cloudwatch-agent
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'AGENT'
+            {
+              "logs": {
+                "logs_collected": {
+                  "files": {
+                    "collect_list": [
+                    {
+                      "file_path": "/var/log/httpd/access_alb_log",
+                      "log_group_name": "${var.ec2_accesslog_name}",
+                      "log_stream_name": "{instance_id}"
+                    },{
+                      "file_path": "/var/log/httpd/error_log",
+                      "log_group_name": "${var.ec2_errorlog_name}",
+                      "log_stream_name": "{instance_id}"
+                    },{
+                      "file_path": "/var/log/cloud-init-output.log",
+                      "log_group_name": "${var.ec2_errorlog_name}",
+                      "log_stream_name": "{instance_id}"
+                    }
+                    ]
+                  }
+                }
+              }
+            }
+            AGENT
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
             dnf install -y httpd
+            cat > /etc/httpd/conf.d/alb.conf << 'CONF'
+            RemoteIPHeader X-Forwarded-For
+            RemoteIPTrustedProxy 10.0.0.0/16
+            LogFormat "%h %l %u %t \"%r\" %>s %b \"%%{Referer}i\" \"%%{User-Agent}i\" %%{c}a" alb_combined
+            CustomLog "logs/access_alb_log" alb_combined
+            CONF
             systemctl enable --now httpd
             echo "<h1>Hello from $(hostname)</h1>" > /var/www/html/index.html
   EOF
@@ -142,6 +183,29 @@ resource "aws_iam_role" "ssm_role" {
         Principal = {
           Service = "ec2.amazonaws.com"
         }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "cloudwatch_logs" {
+  name = "${var.project_name}_cloudwatch_logs"
+  role = aws_iam_role.ssm_role.id
+  policy = jsonencode({
+    "Version" : "2012-10-17",
+    "Statement" : [
+      {
+        "Effect" : "Allow",
+        "Action" : [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          #DescribeLogStreams はASGによるインスタンス置換、エージェントの再起動、ログローテーションで0件を確認したら削除する。列挙しきれないが、誤ってもエージェントのamazon-cloudwatch-agent.logにAccessDeniedが出て1行で復旧できるので、その条件で削除に踏み切る
+          "logs:DescribeLogStreams"
+        ],
+        "Resource" : [
+          "${var.ec2_accesslog_arn}:log-stream:*",
+          "${var.ec2_errorlog_arn}:log-stream:*"
+        ]
       }
     ]
   })

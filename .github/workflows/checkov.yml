@@ -1,0 +1,21 @@
+name: checkov
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checkov:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Run Checkov in a pinned container
+        run: |
+          docker run --rm -w /tf -v "${{ github.workspace }}:/tf" \
+            bridgecrew/checkov:3.3.11 \
+            -d . --skip-path .terraform --skip-path docs --baseline .checkov.baseline --compact

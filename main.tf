@@ -37,6 +37,10 @@ module "compute" {
   vpc_id             = module.network.vpc_id
   public_subnet_ids  = values(module.network.public_subnet_ids)
   private_subnet_ids = values(module.network.private_subnet_ids)
+  ec2_accesslog_name = module.logging.ec2_accesslog_name
+  ec2_accesslog_arn  = module.logging.ec2_accesslog_arn
+  ec2_errorlog_name  = module.logging.ec2_errorlog_name
+  ec2_errorlog_arn   = module.logging.ec2_errorlog_arn
 }
 
 module "database" {
@@ -46,5 +50,11 @@ module "database" {
   vpc_id             = module.network.vpc_id
   private_subnet_ids = values(module.network.private_subnet_ids)
   ec2_sg_id          = module.compute.ec2_sg_id
+}
+
+module "logging" {
+  source = "./modules/logging/"
+
+  project_name = var.project_name
 }
 
