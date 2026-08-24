@@ -16,3 +16,6 @@ jobs:
           docker run --rm -w /tf -v "${{ github.workspace }}:/tf" \
             bridgecrew/checkov:3.3.11 \
             -d . --skip-path .terraform --skip-path docs --baseline .checkov.baseline --compact
+
+permissions:
+  contents: read
