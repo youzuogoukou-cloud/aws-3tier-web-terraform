@@ -71,6 +71,7 @@ resource "aws_security_group" "endpoint_sg" {
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = [var.vpc_cidr_block]
+    description = "Allow HTTPS from within the VPC"
   }
 
   egress {
@@ -78,6 +79,7 @@ resource "aws_security_group" "endpoint_sg" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all outbound traffic"
   }
 
   tags = { Name = "${var.project_name}_endpoint_sg" }
