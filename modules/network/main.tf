@@ -85,6 +85,10 @@ resource "aws_security_group" "endpoint_sg" {
   tags = { Name = "${var.project_name}_endpoint_sg" }
 }
 
+resource "aws_default_security_group" "default" {
+  vpc_id = aws_vpc.main.id
+}
+
 resource "aws_vpc_endpoint" "vpc_endpoint_interface" {
   vpc_id = aws_vpc.main.id
 
