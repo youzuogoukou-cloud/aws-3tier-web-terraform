@@ -9,18 +9,16 @@ resource "aws_security_group" "rds_sg" {
   name        = "${var.project_name}_rds_sg"
   description = "Security group for RDS: allow TCP from EC2"
   vpc_id      = var.vpc_id
+  tags        = { Name = "${var.project_name}_rds_sg" }
+}
 
-  ingress {
-    from_port       = 3306
-    to_port         = 3306
-    protocol        = "tcp"
-    security_groups = [var.ec2_sg_id]
-    description     = "Allow tcp for MySQL from the EC2 only"
-  }
-
-  egress = []
-
-  tags = { Name = "${var.project_name}_rds_sg" }
+resource "aws_vpc_security_group_ingress_rule" "rds_from_ec2" {
+  security_group_id            = aws_security_group.rds_sg.id
+  referenced_security_group_id = var.ec2_sg_id
+  from_port                    = 3306
+  to_port                      = 3306
+  ip_protocol                  = "tcp"
+  description                  = "Allow MySQL from the EC2 only"
 }
 
 resource "aws_db_instance" "rds" {

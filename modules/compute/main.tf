@@ -2,48 +2,68 @@ resource "aws_security_group" "ec2_sg" {
   name        = "${var.project_name}_ec2_sg"
   description = "Security group for EC2: allow HTTP from ALB"
   vpc_id      = var.vpc_id
+  tags        = { Name = "${var.project_name}_ec2_sg" }
+}
 
-  ingress {
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb_sg.id]
-    description     = "Allow HTTP from the ALB only"
-  }
+resource "aws_vpc_security_group_ingress_rule" "ec2_from_alb" {
+  security_group_id            = aws_security_group.ec2_sg.id
+  referenced_security_group_id = aws_security_group.alb_sg.id
+  from_port                    = 80
+  to_port                      = 80
+  ip_protocol                  = "tcp"
+  description                  = "Allow HTTP from the ALB only"
+}
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all outbound traffic"
-  }
+resource "aws_vpc_security_group_egress_rule" "ec2_to_s3" {
+  security_group_id = aws_security_group.ec2_sg.id
+  prefix_list_id    = var.s3_prefix_list_id
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "Allow HTTPS to the s3"
+}
 
-  tags = { Name = "${var.project_name}_ec2_sg" }
+resource "aws_vpc_security_group_egress_rule" "ec2_to_rds" {
+  security_group_id = aws_security_group.ec2_sg.id
+  cidr_ipv4         = var.vpc_cidr_block
+  from_port         = 3306
+  to_port           = 3306
+  ip_protocol       = "tcp"
+  description       = "Allow MySQL to the rds"
+}
+
+resource "aws_vpc_security_group_egress_rule" "ec2_to_ssm" {
+  security_group_id = aws_security_group.ec2_sg.id
+  cidr_ipv4         = var.vpc_cidr_block
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "Allow SSM to endpoint interface"
 }
 
 resource "aws_security_group" "alb_sg" {
   name        = "${var.project_name}_alb_sg"
   description = "Security group for ALB: allow HTTP from internet"
   vpc_id      = var.vpc_id
+  tags        = { Name = "${var.project_name}_alb_sg" }
+}
 
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow HTTP from internet"
-  }
+resource "aws_vpc_security_group_ingress_rule" "alb_from_internet" {
+  security_group_id = aws_security_group.alb_sg.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 80
+  to_port           = 80
+  ip_protocol       = "tcp"
+  description       = "Allow HTTP from internet"
+}
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all outbound traffic"
-  }
-
-  tags = { Name = "${var.project_name}_alb_sg" }
+resource "aws_vpc_security_group_egress_rule" "alb_to_ec2" {
+  security_group_id            = aws_security_group.alb_sg.id
+  referenced_security_group_id = aws_security_group.ec2_sg.id
+  from_port                    = 80
+  to_port                      = 80
+  ip_protocol                  = "tcp"
+  description                  = "Allow HTTP to the EC2"
 }
 
 resource "aws_lb" "alb" {

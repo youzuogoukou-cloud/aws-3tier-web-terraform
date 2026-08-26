@@ -65,24 +65,16 @@ resource "aws_security_group" "endpoint_sg" {
   name        = "${var.project_name}_endpoint_sg"
   description = "Security group for VPC interface endpoints: allow HTTPS from within the VPC"
   vpc_id      = aws_vpc.main.id
+  tags        = { Name = "${var.project_name}_endpoint_sg" }
+}
 
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr_block]
-    description = "Allow HTTPS from within the VPC"
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all outbound traffic"
-  }
-
-  tags = { Name = "${var.project_name}_endpoint_sg" }
+resource "aws_vpc_security_group_ingress_rule" "endpoint_from_ec2" {
+  security_group_id = aws_security_group.endpoint_sg.id
+  cidr_ipv4         = var.vpc_cidr_block
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "Allow SSM from the EC2"
 }
 
 resource "aws_default_security_group" "default" {
