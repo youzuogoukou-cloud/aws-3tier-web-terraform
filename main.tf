@@ -35,12 +35,14 @@ module "compute" {
   instance_type      = var.instance_type
   project_name       = var.project_name
   vpc_id             = module.network.vpc_id
+  vpc_cidr_block     = var.vpc_cidr_block
   public_subnet_ids  = values(module.network.public_subnet_ids)
   private_subnet_ids = values(module.network.private_subnet_ids)
   ec2_accesslog_name = module.logging.ec2_accesslog_name
   ec2_accesslog_arn  = module.logging.ec2_accesslog_arn
   ec2_errorlog_name  = module.logging.ec2_errorlog_name
   ec2_errorlog_arn   = module.logging.ec2_errorlog_arn
+  s3_prefix_list_id  = module.network.s3_prefix_list_id
 }
 
 module "database" {
