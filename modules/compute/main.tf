@@ -156,11 +156,26 @@ resource "aws_launch_template" "launch_temp" {
   }
 }
 
+resource "aws_autoscaling_policy" "asg_policy" {
+  name                   = "${var.project_name}_asg_policy"
+  autoscaling_group_name = aws_autoscaling_group.asg.name
+  policy_type            = "TargetTrackingScaling"
+  target_tracking_configuration {
+    target_value = 50
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+  }
+}
+
 resource "aws_autoscaling_group" "asg" {
-  name                = "${var.project_name}_asg"
-  desired_capacity    = 2
-  min_size            = 2
-  max_size            = 2
+  name             = "${var.project_name}_asg"
+  desired_capacity = 2
+  min_size         = 2
+  max_size         = 4
+  lifecycle {
+    ignore_changes = [desired_capacity]
+  }
   vpc_zone_identifier = var.private_subnet_ids
   target_group_arns   = [aws_lb_target_group.alb_tg.arn]
   health_check_type   = "ELB"
@@ -199,7 +214,7 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
         "Action" : [
           "logs:CreateLogStream",
           "logs:PutLogEvents",
-       ],
+        ],
         "Resource" : [
           "${var.ec2_accesslog_arn}:log-stream:*",
           "${var.ec2_errorlog_arn}:log-stream:*"
