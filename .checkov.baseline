@@ -55,16 +55,15 @@
                     ]
                 },
                 {
-                    "resource": "module.compute.aws_security_group.alb_sg",
+                    "resource": "module.compute.aws_vpc_security_group_ingress_rule.alb_from_internet",
                     "check_ids": [
-                        "CKV_AWS_260",
-                        "CKV_AWS_382"
+                        "CKV_AWS_260"
                     ]
                 },
                 {
-                    "resource": "module.compute.aws_security_group.ec2_sg",
+                    "resource": "module.compute.aws_vpc_security_group_ingress_rule.ec2_from_alb",
                     "check_ids": [
-                        "CKV_AWS_382"
+                        "CKV_AWS_260"
                     ]
                 }
             ]
@@ -108,12 +107,6 @@
         {
             "file": "\\modules\\network\\main.tf",
             "findings": [
-                {
-                    "resource": "module.network.aws_security_group.endpoint_sg",
-                    "check_ids": [
-                        "CKV_AWS_382"
-                    ]
-                },
                 {
                     "resource": "module.network.aws_subnet.public_subnet[\"a\"]",
                     "check_ids": [
