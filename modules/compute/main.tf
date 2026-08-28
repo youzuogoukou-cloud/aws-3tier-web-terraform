@@ -312,4 +312,7 @@ resource "aws_acm_certificate" "cert" {
   private_key      = tls_private_key.cert_key.private_key_pem
   certificate_body = tls_self_signed_cert.cert.cert_pem
   depends_on       = [time_sleep.wait_for_cert]
+  lifecycle {
+    create_before_destroy = true
+  }
 }
