@@ -57,6 +57,16 @@ resource "aws_vpc_security_group_ingress_rule" "alb_from_internet" {
   description       = "Allow HTTP from internet"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "alb_from_redirect" {
+  security_group_id = aws_security_group.alb_sg.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "Allow HTTPS from redirect"
+}
+
+
 resource "aws_vpc_security_group_egress_rule" "alb_to_ec2" {
   security_group_id            = aws_security_group.alb_sg.id
   referenced_security_group_id = aws_security_group.ec2_sg.id
@@ -94,17 +104,33 @@ resource "aws_lb_target_group" "alb_tg" {
   }
 }
 
-resource "aws_lb_listener" "alb_listener" {
+resource "aws_lb_listener" "alb_80listener" {
   load_balancer_arn = aws_lb.alb.arn
   port              = "80"
   protocol          = "HTTP"
+
+  default_action {
+    type = "redirect"
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
+}
+
+resource "aws_lb_listener" "alb_443listener" {
+  load_balancer_arn = aws_lb.alb.arn
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = aws_acm_certificate.cert.arn
 
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.alb_tg.arn
   }
 }
-
 
 data "aws_ami" "amazon_linux" {
   most_recent = true
@@ -252,4 +278,41 @@ resource "aws_iam_role_policy_attachment" "ssm" {
 resource "aws_iam_instance_profile" "ssm_profile" {
   name = "${var.project_name}_ec2_ssm_profile"
   role = aws_iam_role.ssm_role.name
+}
+
+resource "tls_private_key" "cert_key" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "cert" {
+  private_key_pem = tls_private_key.cert_key.private_key_pem
+
+  subject {
+    common_name  = "portfolio-web.example.com"
+    organization = "portfolio-web"
+  }
+  dns_names             = ["portfolio-web.example.com"]
+  validity_period_hours = 8760
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+}
+
+# 自己署名証明書の NotBefore が未来扱いされ ACM インポートが拒否されるのを避ける待ち
+resource "time_sleep" "wait_for_cert" {
+  depends_on      = [tls_self_signed_cert.cert]
+  create_duration = "150s"
+}
+
+resource "aws_acm_certificate" "cert" {
+  private_key      = tls_private_key.cert_key.private_key_pem
+  certificate_body = tls_self_signed_cert.cert.cert_pem
+  depends_on       = [time_sleep.wait_for_cert]
+  lifecycle {
+    create_before_destroy = true
+  }
 }
