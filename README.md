@@ -14,65 +14,9 @@ ALB を公開層に置き、実際にリクエストを処理する EC2 はパ�
 
 ## アーキテクチャ
 
-```mermaid
-flowchart TB
-    User([ユーザー])
+![3層Webアプリのアーキテクチャ（AWS公式アイコン）](docs/images/architecture.png)
 
-    subgraph VPC["VPC 10.0.0.0/16 &nbsp;(ap-northeast-1)"]
-        IGW[Internet Gateway]
-
-        subgraph Public["パブリックサブネット &nbsp;10.0.101.0/24 (a) / 10.0.102.0/24 (c)"]
-            ALB["ALB (internet-facing)<br/>alb_sg: inbound 80, 443 from 0.0.0.0/0"]
-        end
-
-        subgraph Private["プライベートサブネット &nbsp;10.0.1.0/24 (a) / 10.0.2.0/24 (c)"]
-            EC2A["EC2 / httpd&nbsp;(AZ-a)"]
-            EC2C["EC2 / httpd&nbsp;(AZ-c)"]
-            EPS["Interface Endpoints<br/>ssm / ssmmessages / ec2messages / logs"]
-            RDS[("RDS MySQL 8.4<br/>rds_sg: inbound 3306 from ec2_sg のみ<br/>publicly_accessible = false")]
-        end
-
-        S3EP["S3 Gateway Endpoint<br/>(プライベートルートテーブルに経路を追加)"]
-    end
-
-    ASG[["Auto Scaling Group<br/>min=2 / max=4 / health_check_type=ELB<br/>ターゲット追跡（CPU平均50%）"]]
-    SM[["Secrets Manager<br/>マスターパスワードを生成・保管"]]
-    CWL[["CloudWatch Logs<br/>accesslog / errorlog &nbsp;(保持90日)"]]
-
-    User -->|"HTTPS :443<br/>(HTTP :80 は 443 へリダイレクト)"| IGW --> ALB
-    ALB -->|"HTTP :80 / local route<br/>ec2_sg: inbound 80 from alb_sg のみ"| EC2A
-    ALB --> EC2C
-    ASG -.->|起動・ターゲット登録・置換| EC2A
-    ASG -.-> EC2C
-    EC2A -.->|HTTPS :443| EPS
-    EC2A -.->|dnf install httpd| S3EP
-    EPS -.->|"CloudWatch Agent が送信<br/>(httpd の access / error, cloud-init)"| CWL
-    EC2A -->|"MySQL :3306"| RDS
-    EC2C --> RDS
-    RDS -.->|"パスワードを生成・保管させる<br/>(シークレットは RDS が所有)"| SM
-
-    classDef network  fill:transparent,stroke:#8C4FFF,stroke-width:2px,color:#8C4FFF
-    classDef compute  fill:transparent,stroke:#ED7100,stroke-width:2px,color:#ED7100
-    classDef database fill:transparent,stroke:#527FFF,stroke-width:2px,color:#527FFF
-    classDef storage  fill:transparent,stroke:#7AA116,stroke-width:2px,color:#7AA116
-    classDef security fill:transparent,stroke:#DD344C,stroke-width:2px,color:#DD344C
-    classDef mgmt     fill:transparent,stroke:#E7157B,stroke-width:2px,color:#E7157B
-    classDef actor    fill:transparent,stroke:#879196,stroke-width:2px,color:#879196
-
-    class IGW,ALB,EPS network
-    class EC2A,EC2C,ASG compute
-    class RDS database
-    class S3EP storage
-    class SM security
-    class CWL mgmt
-    class User actor
-
-    style VPC     fill:transparent,stroke:#8C4FFF,stroke-width:2px,color:#8C4FFF
-    style Public  fill:transparent,stroke:#7AA116,stroke-width:2px,color:#7AA116
-    style Private fill:transparent,stroke:#00A4A6,stroke-width:2px,color:#00A4A6
-```
-
-> ASG・Secrets Manager・CloudWatch Logs を VPC の外に描いているのは、これらが**サブネットに存在するリソースではなく、リソースの外側から支える仕組み**だからです。ASG が起動した EC2 も、Secrets Manager が保管するパスワードも、Terraform の state には現れません。CloudWatch Logs は**ロググループだけが Terraform の管理対象**で、その中のログストリームは EC2 が実行時に作ります。
+> **Secrets Manager と CloudWatch Logs を VPC の外に描いている**のは、これらが**サブネットに存在するリソースではなく、外側から支える仕組み**だからです。**Auto Scaling Group は EC2 を破線で囲って**表していますが、これも「何台維持するか」を制御する仕組みであってサブネットの住人ではありません。ASG が起動した EC2 も、Secrets Manager が保管するパスワードも、**Terraform の state には現れません**。CloudWatch Logs は**ロググループだけが Terraform の管理対象**で、その中のログストリームは EC2 が実行時に作ります。
 
 **通信の流れ**
 
