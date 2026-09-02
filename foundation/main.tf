@@ -23,8 +23,6 @@ data "aws_caller_identity" "my_account" {}
 
 resource "aws_s3_bucket" "cloudtrail_bucket" {
   bucket = local.bucket_name
-
-  tags = { Name = local.bucket_name }
 }
 
 resource "aws_s3_bucket_policy" "allow_access_from_another_service" {
@@ -104,4 +102,164 @@ resource "aws_s3_bucket_lifecycle_configuration" "lifecycle_cloudtrail" {
       days_after_initiation = 7
     }
   }
+}
+
+resource "aws_iam_openid_connect_provider" "github_connect" {
+  url = "https://token.actions.githubusercontent.com"
+
+  client_id_list = ["sts.amazonaws.com"]
+}
+
+resource "aws_iam_role" "cicd_apply_role" {
+  name = "${var.project_name}_cicd_apply_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Federated = aws_iam_openid_connect_provider.github_connect.arn }
+        Action    = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+            "token.actions.githubusercontent.com:sub" = "repo:youzuogoukou-cloud@293054394/aws-3tier-web-terraform@1332749804:ref:refs/heads/main"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role" "cicd_plan_role" {
+  name = "${var.project_name}_cicd_plan_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Federated = aws_iam_openid_connect_provider.github_connect.arn }
+        Action    = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+            "token.actions.githubusercontent.com:sub" = "repo:youzuogoukou-cloud@293054394/aws-3tier-web-terraform@1332749804:pull_request"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ec2" {
+  role       = aws_iam_role.cicd_apply_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2FullAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "rds" {
+  role       = aws_iam_role.cicd_apply_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonRDSFullAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "iam" {
+  role       = aws_iam_role.cicd_apply_role.name
+  policy_arn = "arn:aws:iam::aws:policy/IAMFullAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "cloudwatch_logs" {
+  role       = aws_iam_role.cicd_apply_role.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "read_only" {
+  role       = aws_iam_role.cicd_plan_role.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+resource "aws_iam_role_policy" "cicd_apply_policy" {
+  name = "${var.project_name}_cicd_apply_policy"
+  role = aws_iam_role.cicd_apply_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        "Sid" : "TerraformACMImport",
+        "Effect" : "Allow",
+        "Action" : [
+          "acm:ImportCertificate",
+          "acm:DescribeCertificate",
+          "acm:ListTagsForCertificate",
+          "acm:AddTagsToCertificate",
+          "acm:RemoveTagsFromCertificate",
+          "acm:DeleteCertificate"
+        ],
+        "Resource" : "arn:aws:acm:ap-northeast-1:533266981533:certificate/*"
+      },
+      {
+        "Effect" : "Allow",
+        "Action" : [
+          "kms:ListAliases",
+          "kms:DescribeKey"
+        ],
+        "Resource" : "*"
+      },
+      {
+        "Effect" : "Allow",
+        "Action" : [
+          "kms:CreateGrant",
+          "kms:GenerateDataKey"
+        ],
+        "Resource" : "*",
+        "Condition" : {
+          "StringEquals" : {
+            "kms:ViaService" : "rds.ap-northeast-1.amazonaws.com"
+          }
+        }
+      },
+      {
+        "Effect" : "Allow",
+        "Action" : [
+          "secretsmanager:CreateSecret",
+          "secretsmanager:TagResource",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:RotateSecret",
+          "secretsmanager:DeleteSecret"
+        ],
+        "Resource" : "*"
+      },
+      {
+        "Effect" : "Allow",
+        "Action" : "s3:ListBucket",
+        "Resource" : "arn:aws:s3:::tf-portfolio-state-533266981533-ap-northeast-1-an"
+      },
+      {
+        "Effect" : "Allow",
+        "Action" : [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ],
+        "Resource" : "arn:aws:s3:::tf-portfolio-state-533266981533-ap-northeast-1-an/*"
+      }
+
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "cicd_plan_policy" {
+  name = "${var.project_name}_cicd_plan_policy"
+  role = aws_iam_role.cicd_plan_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:DeleteObject"] # ロック用の書き込みだけ
+        Resource = "arn:aws:s3:::tf-portfolio-state-533266981533-ap-northeast-1-an/*"
+      }
+    ]
+  })
 }

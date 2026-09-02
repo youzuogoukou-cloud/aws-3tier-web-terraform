@@ -1,0 +1,28 @@
+name: terraform plan
+
+on:
+  pull_request:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::533266981533:role/portfolio-web_cicd_plan_role
+          aws-region: ap-northeast-1
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - run: |
+          terraform init\
+            -backend-config="bucket=tf-portfolio-state-533266981533-ap-northeast-1-an" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="region=ap-northeast-1"
+      - run: terraform plan
