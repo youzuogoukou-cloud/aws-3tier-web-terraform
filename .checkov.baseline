@@ -12,6 +12,20 @@
                     ]
                 },
                 {
+                    "resource": "aws_iam_role_policy.cicd_apply_policy",
+                    "check_ids": [
+                        "CKV_AWS_288",
+                        "CKV_AWS_290",
+                        "CKV_AWS_355"
+                    ]
+                },
+                {
+                    "resource": "aws_iam_role_policy_attachment.iam",
+                    "check_ids": [
+                        "CKV2_AWS_56"
+                    ]
+                },
+                {
                     "resource": "aws_s3_bucket.cloudtrail_bucket",
                     "check_ids": [
                         "CKV2_AWS_62",
