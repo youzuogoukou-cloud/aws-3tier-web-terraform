@@ -23,8 +23,6 @@ data "aws_caller_identity" "my_account" {}
 
 resource "aws_s3_bucket" "cloudtrail_bucket" {
   bucket = local.bucket_name
-
-  tags = { Name = local.bucket_name }
 }
 
 resource "aws_s3_bucket_policy" "allow_access_from_another_service" {
