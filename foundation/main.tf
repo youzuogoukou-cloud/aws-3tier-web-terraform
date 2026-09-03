@@ -123,7 +123,11 @@ resource "aws_iam_role" "cicd_apply_role" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:youzuogoukou-cloud@293054394/aws-3tier-web-terraform@1332749804:ref:refs/heads/main"
+            # sub は GitHub 発行トークンの値と完全一致が必須（StringEquals）。
+            # @数字 = アカウント/リポの不変ID。GitHub がリネーム対策で既定付与するので repo:owner/repo だけでは不一致になる。
+            # 末尾が environment:production なのは apply ジョブが environment: production を使うため（未使用なら ref:refs/heads/main）。
+            # いずれも validate/plan では捕まらず assume 時に静かに拒否される。値は CloudTrail の実 sub で確認済み。
+            "token.actions.githubusercontent.com:sub" = "repo:youzuogoukou-cloud@293054394/aws-3tier-web-terraform@1332749804:environment:production"
           }
         }
       }
