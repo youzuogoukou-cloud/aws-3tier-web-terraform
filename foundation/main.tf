@@ -123,7 +123,7 @@ resource "aws_iam_role" "cicd_apply_role" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:youzuogoukou-cloud@293054394/aws-3tier-web-terraform@1332749804:ref:refs/heads/main"
+            "token.actions.githubusercontent.com:sub" = "repo:youzuogoukou-cloud@293054394/aws-3tier-web-terraform@1332749804:environment:production"
           }
         }
       }
