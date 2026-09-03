@@ -59,6 +59,10 @@ ALB を公開層に置き、実際にリクエストを処理する EC2 はパ�
 | 20 | 自動スケーリング | **ターゲット追跡ポリシー**（CPU 平均50%目標・`min=2 / max=4`・`ignore_changes = [desired_capacity]`） | **種類**：スケーリングポリシーは「ターゲット追跡」「ステップ」「シンプル」「予測」から選ぶ。ステップは増減量を段階ごとに自分で設計できるが、静的ページで**負荷特性が単純**なため作り込みが過剰になる。目標値を1つ与えるだけで済むターゲット追跡を、**運用の単純さ**で選んだ（AWS 公式が推奨するデフォルトでもある）。<br><br>**目標50%**：低すぎると些細な変動で増設してコストがかさみ、高すぎると詰まってから増設が始まり手遅れになる。新インスタンスは起動→`user_data`→ヘルスチェック通過まで数分かかるため、**その立ち上げ時間のあいだも既存の余力で吸収できる余白**として中間の50%に置いた。<br><br>**幅 `min=2 / max=4`**：`min=2` は AZ 障害時も各 AZ に1台を残すための冗長性の下限。`max=4` は**青天井を防ぐコストの安全弁**——ターゲット追跡は目標維持に必要なだけ台数を増やすため、バグや攻撃で CPU が張り付くと上限が無ければ際限なく増える。最悪でも通常の2倍で頭打ちにし、偶数にして 2AZ へ均等分散させた。<br><br>**`ignore_changes = [desired_capacity]`**：`desired_capacity` はポリシーが実行時に書き換えるフィールド。Terraform が設定値（初期台数の2）へ戻そうとすると、**混雑の最中に台数を縮退させてポリシーと綱引き**になる。制御をポリシーに委譲したこのフィールドだけ差分監視から外す。`min` / `max` は自分で決めるガードレールなので監視は続ける。なお `ignore_changes` は更新時のみ効くため、`desired_capacity = 2` は「初期台数」としては有効に働く |
 | 21 | SG ルールの定義方式と egress の最小化 | **独立ルールリソース**（`aws_vpc_security_group_ingress_rule` / `egress_rule`）に統一し、egress を宛先ごとに最小化（全開放を廃止） | **独立ルールを選んだ理由**：AWS プロバイダー公式が独立ルールを **current best practice** と明記しており、インラインの `ingress`/`egress` ブロックと旧 `aws_security_group_rule` は避けるべきとされている（1ルール1リソースで description・タグ・一意IDを持てる）。加えて**インラインでは SG 同士の相互参照が `Error: Cycle` になる**——ALB と EC2 は互いの SG を指すため（ALB は EC2 へ送るのを許可し、EC2 は ALB からのみ受ける）、独立リソースにして初めて両方向を書ける（ルールが別リソースになり、SG の箱同士は互いを参照しなくなるため循環しない）。<br><br>**宛先の書き分け**：同一モジュール内の相手は **SG 参照**（`referenced_security_group_id`）で最小に縛る（ALB↔EC2、RDS←EC2）。モジュールを跨ぐ相手は **CIDR / prefix list** で疎結合を保つ（EC2→エンドポイントと EC2→RDS は VPC CIDR、EC2→S3 は S3 の managed prefix list）。跨ぎで SG 参照すると参照した側のモジュールが相手に依存し、`network → compute → database` の一方向の依存が相互依存に崩れるため。**通信の向きとモジュール依存の向きは別物**で、跨ぐルールは常に依存の下流側モジュールに置くことで、通信が双方向でも依存は一方向に保てる。<br><br>**deny-all の表し方**：egress を全遮断する SG（VPC エンドポイント・RDS）は、**egress ルールを1本も書かない**。Terraform は SG 作成時に AWS 既定の allow-all egress を削除するため、ルールが無い＝全拒否になる（旧インライン方式の `egress = []` に相当）。受け身のリソースは、インバウンドへの応答がステートフルに戻るため egress は要らない |
 | 22 | HTTPS 化と証明書の入手方法 | **自己署名証明書を ACM にインポートし、ALB で HTTPS 終端＋HTTP(80)→HTTPS(443) リダイレクト** | **証明書の入手方法**：選択肢は「独自ドメインを取得し ACM の DNS 検証で正式に発行」「自己署名証明書を作って ACM に持ち込む」「実装しない」の3つ。独自ドメイン方式は鍵マークが出る反面、購入費と Route53 などの永続リソースを伴い自己学習には過剰。実装しない選択は3層 Web で必ず問われる HTTPS の仕組みを手元に残せない。そこで自己署名を選び、**暗号化はされるが認証は得られない（信頼された発行元の裏書きがなくブラウザは警告する）**というトレードオフを承知で費用ゼロで実装した。なお HTTPS は ALB で終端し、ALB→EC2 はプライベート網内の HTTP(80) のまま転送する。<br><br>**`ssl_policy = TLS13-1-2-2021-06`**：緩い `TLS13-1-0`（1.0 / 1.1 も許可）は既知の脆弱性のため採らず、厳しい `TLS13-1-3`（1.3 のみ）は古いクライアントを締め出すため採らない。**レガシーを弾きつつ広い互換性を残す**中間点 |
+| 23 | GitHub Actions から AWS への認証 | **OIDC**（`AssumeRoleWithWebIdentity`）＝長期アクセスキーを廃止 | 長期の IAM アクセスキーを GitHub Secrets に置くと、漏洩すれば恒久的に悪用でき、ローテーションも手動になる。OIDC なら **GitHub が実行ごとに署名する短命トークン**を AWS が検証して一時クレデンシャルを発行するため、**保管する秘密が存在しない**。信頼は AWS 側の IAM ロールの**信頼ポリシー（誰が assume してよいか）**で制御し、GitHub は身元を名乗るだけ。＝**発行（GitHub）と認可（AWS）の分離**。認可は自分のアカウントの持ち主である AWS にしか置けない |
+| 24 | CI が assume するロールの権限 | **plan role（PR・読み取り専用）と apply role（main・書き込み）を分離** | plan は差分を読むだけなので、`ReadOnlyAccess`（refresh の Describe/Get/List）＋ state ロック用の最小 S3 書き込みで足りる。apply は作成・変更・削除の全権が要る。<br><br>ただし **apply 権限は最小化できない**——`terraform apply` は収束のため削除も含むライフサイクル全体を扱う（設定から消せば delete、replace でも delete する）。だから安全は「**権限を絞る**」ことではなく「**誰が・いつ呼べるか**」＝信頼ポリシーの `sub`（リポジトリ・イベント限定）＋承認ゲートで担保する |
+| 25 | apply の発火方法 | **`environment: production` の承認ゲート付き＝継続的デリバリー**（マージで即 apply する継続的デプロイにはしない） | このプロジェクトは `apply → 確認 → destroy` の使い捨てでコストを抑えている。main へのマージで自動 apply されると**勝手に課金が始まる**。承認を挟むことで「**立てたい時だけ承認して立てる**」を保つ。CI（変更ごとの自動チェック）は常時走らせ、デプロイだけを人の承認で発火させる区別 |
+| 26 | teardown（destroy）の自動化 | **`workflow_dispatch`（手動起動）＋ `environment` 承認 ＋ apply role を再利用** | destroy は apply と目的が正反対（apply＝コードに収束／destroy＝全削除）で**コード変更とは無関係**。push トリガにすると README 修正のマージでもアプリが全消しになるため、**手動起動が正しい**。<br><br>専用ロールは作らない——apply role は既に削除権限を持つ（FullAccess、かつ apply 自体が削除する）ので、**権限では apply/destroy を分けられず**、分ける利益がない。apply role を再利用した結果、その信頼ポリシーが `sub = environment:production` を要求するため、**destroy ジョブにも `environment: production` が必須**になる（同時に破壊的操作の承認ゲートも得られる） |
 
 ---
 
@@ -71,6 +75,13 @@ ALB を公開層に置き、実際にリクエストを処理する EC2 はパ�
 ├── locals.tf               # 全リソース共通タグ
 ├── outputs.tf              # ALB の DNS 名 / RDS のホスト名
 ├── backend.hcl.example     # state 保存先の雛形（実物の backend.hcl は gitignore）
+├── .github/
+│   └── workflows/
+│       ├── plan.yml        # PR で terraform plan（plan role を assume）
+│       ├── apply.yml       # main で terraform apply（apply role・production 承認）
+│       ├── destroy.yml     # 手動で terraform destroy（apply role・production 承認）
+│       └── checkov.yml     # PR で IaC 静的解析ゲート
+├── .checkov.baseline       # checkov の承認済み例外（意図的なトレードオフ）
 ├── modules/
 │   ├── network/            # VPC・サブネット・ルート・IGW・VPCエンドポイント
 │   │   ├── main.tf
@@ -89,7 +100,7 @@ ALB を公開層に置き、実際にリクエストを処理する EC2 はパ�
 │       ├── variables.tf
 │       └── outputs.tf
 ├── foundation/             # 別ルートモジュール（独立した state）＝CloudTrail 証跡＋ログ用 S3。分けた理由は設計判断 #17
-│   ├── main.tf             # 証跡・S3 バケット・バケットポリシー・public access block・versioning
+│   ├── main.tf             # OIDC プロバイダ・CI ロール（plan/apply）・証跡・S3 バケット・バケットポリシー・public access block・versioning
 │   ├── variables.tf
 │   ├── locals.tf
 │   └── backend.hcl.example
@@ -145,6 +156,10 @@ EC2 に付与するロールとは**別主体**の話です。「作る権限」
 >
 > また `DeleteSecret` を落とすと**作れるが片付けられない**状態になります。作成系の権限だけ付けて destroy で詰まるのは頻出の事故なので、削除系も併せて確認してください。
 
+> **この表はローカル実行（手元での `terraform` 実行）を行う IAM ユーザーの権限です。** CI（GitHub Actions）は OIDC の plan / apply ロールを assume するため、**長期のアクセスキーは使いません**（設計判断 #23）。
+>
+> ただし OIDC プロバイダとロール自体は `foundation/` にあるので、**最初の1回はこの IAM ユーザーが手動で `foundation/` を apply して作る**必要があります（bootstrap は手動）。それ以降、アプリの plan / apply は CI のロールが担います。
+
 ---
 
 ## 使い方
@@ -198,6 +213,25 @@ ALB・EC2・Interface エンドポイントは起動している間だけ課金�
 ```bash
 terraform destroy
 ```
+
+---
+
+## CI/CD（GitHub Actions + OIDC）
+
+plan / apply / destroy を GitHub Actions で回す。AWS への認証は **OIDC** で、長期のアクセスキーは保持していない（設計判断 #23）。
+
+**ワークフロー4本：**
+
+| ファイル | 起動 | 使うロール | 内容 |
+|---|---|---|---|
+| `plan.yml` | PR | plan role（読み取り専用） | `terraform plan` で差分を PR に出す |
+| `checkov.yml` | PR | （AWS 認証なし） | IaC の静的解析。baseline を超える新規指摘が出ると**赤＝マージをブロック** |
+| `apply.yml` | main への push | apply role（書き込み） | `production` 承認 → `terraform apply` |
+| `destroy.yml` | **手動**（`workflow_dispatch`） | apply role | `production` 承認 → `terraform destroy` |
+
+**流れ：** PR を作る → `plan` と `checkov` が走る → **両方緑でマージ可**（ブランチ保護ルール）→ main にマージ → `apply.yml` が**承認待ちで停止** → 承認すると apply が走る。破棄は `destroy.yml` を手動起動して承認する。
+
+**OIDC の信頼：** `foundation/` に IAM OIDC プロバイダと2つの CI ロール（plan / apply）を定義している。各ロールの**信頼ポリシー**は、GitHub が発行するトークンの `sub`（`repo:<owner>/<repo>:<コンテキスト>`）が一致したときだけ assume を許可する。plan role は PR（`pull_request`）、apply role は `environment:production` を許可する。**`sub` の値は GitHub が決める**ため、信頼ポリシーは実際のトークンに合わせる必要がある（ハマりどころは[既知の制約](#既知の制約と今後の予定)に記載）。
 
 ---
 
@@ -422,3 +456,5 @@ nc -zv <rds_hostname> 3306
 | **HTTPS が自己署名** | ALB で HTTPS 終端と HTTP→HTTPS リダイレクトまで実装したが、証明書は自己署名のためブラウザは警告する（**通信は暗号化されるが、信頼された発行元による認証は得られない**）。信頼された証明書を出すには独自ドメインの取得と ACM の DNS 検証が必要で、自己学習では見送った |
 | **AMI を固定していない** | `data "aws_ami"` の `most_recent = true` と起動テンプレートの `version = "$Latest"` により、新しい AMI が公開されると**次に起動するインスタンスから世代が変わる**（同一 ASG 内で世代が混ざりうる）。常に最新のパッチで起動できる利点と引き換えに再現性を失っている。本番では AMI ID を変数として固定し、更新は instance refresh で意図的に行うべき |
 | **httpd を起動のたびにインストールしている** | `user_data` で `dnf install` するため、**起動が遅く、リポジトリへの到達性に依存する**（起動直後はヘルスチェックを通らない）。事前に焼き込んだ AMI にすれば解消するが、AMI をビルド・管理する仕組みが必要になる。配信物が静的ページ1枚の現状では見合わないと判断した |
+| **apply role の権限が広い（最小化不能）** | apply は作成・変更・削除のライフサイクル全体を扱うため、権限を狭められない（設計判断 #24）。安全は権限の狭さではなく、信頼ポリシーの `sub` 限定と `production` の承認ゲートで担保している。checkov が検知する KMS / Secrets Manager の `Resource:*` と `IAMFullAccess` の4件は、意図的なトレードオフとして `.checkov.baseline` に登録している |
+| **OIDC 信頼ポリシーの `sub`** | 信頼ポリシーの `sub` は GitHub が発行する実トークンと完全一致しないと assume が静かに拒否される（`validate` も `plan` も通ってしまう）。`sub` にはリネーム対策の不変な数値ID が含まれ、`environment:` を使うジョブでは末尾が `environment:<名前>` に変わるため、記憶ではなく CloudTrail の実 `sub` で確認して書く必要がある |
