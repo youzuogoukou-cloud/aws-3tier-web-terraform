@@ -101,6 +101,20 @@
                         "CKV_AWS_158",
                         "CKV_AWS_338"
                     ]
+                },
+                {
+                    "resource": "module.logging.aws_cloudwatch_log_group.vpc_flow_log",
+                    "check_ids": [
+                        "CKV_AWS_158",
+                        "CKV_AWS_338"
+                    ]
+                },
+                {
+                    "resource": "module.logging.aws_iam_role_policy.flow_log",
+                    "check_ids": [
+                        "CKV_AWS_290",
+                        "CKV_AWS_355"
+                    ]
                 }
             ]
         },
