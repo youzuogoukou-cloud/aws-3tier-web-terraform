@@ -27,6 +27,8 @@ provider "aws" {
   }
 }
 
+data "aws_caller_identity" "my_account" {}
+
 module "network" {
   source = "./modules/network/"
 
@@ -66,5 +68,8 @@ module "logging" {
   source = "./modules/logging/"
 
   project_name = var.project_name
+  account_id   = data.aws_caller_identity.my_account.account_id
+  region       = var.region
+  vpc_id       = module.network.vpc_id
 }
 
